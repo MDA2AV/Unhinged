@@ -1,6 +1,7 @@
 namespace Unhinged;
 
-// ReSharper disable once SuggestVarOrType_BuiltInTypes
+// ReSharper disable always SuggestVarOrType_BuiltInTypes
+// ReSharper disable always SuggestVarOrType_Elsewhere
 
 // Still very basic static responses
 // TODO: Completely refactor this

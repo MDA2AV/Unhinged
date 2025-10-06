@@ -3,7 +3,7 @@ using static Unhinged.ProcessorArchDependant;
 
 namespace Unhinged;
 
-// ReSharper disable once SuggestVarOrType_BuiltInTypes
+// ReSharper disable always SuggestVarOrType_BuiltInTypes
 
 // First draft, will be reworked
 internal sealed unsafe class Worker
