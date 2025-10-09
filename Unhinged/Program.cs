@@ -191,10 +191,11 @@ internal static unsafe class Program
     // Pick the worker with the lowest Current count.
     private static int ChooseLeastBusy(Worker[] workers)
     {
-        int best = 0; long bestLoad = long.MaxValue;
+        int best = 0; int bestLoad = int.MaxValue;
         for (int i = 0; i < workers.Length; i++)
         {
-            long load = Volatile.Read(ref workers[i].Current);
+            // Volatile: 
+            int load = Volatile.Read(ref workers[i].Current);
             if (load < bestLoad) { bestLoad = load; best = i; }
         }
         return best;
@@ -247,6 +248,7 @@ internal static unsafe class Program
                     if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd); continue; }
 
                     // Ensure free space at the tail; compact or grow if necessary.
+                    // TODO: This logic needs rework, doesn't sense
                     int avail = c.Buf.Length - c.Tail;
                     if (avail == 0)
                     {
@@ -337,7 +339,7 @@ internal static unsafe class Program
                         }
                         int err = (nSent == 0) ? EAGAIN : Marshal.GetLastPInvokeError();
                         if (err == EAGAIN) break; // stay armed for EPOLLOUT
-                        if (err == EPIPE || err == ECONNRESET) { CloseConn(fd, conns, W); break; }
+                        if (err is EPIPE or ECONNRESET) { CloseConn(fd, conns, W); break; }
                         CloseConn(fd, conns, W); break;
                     }
                     continue;
@@ -356,13 +358,23 @@ internal static unsafe class Program
             int idx = FindCrlfCrlf(c.Buf, c.Head, c.Tail);
             if (idx < 0) return false; // need more data
             c.Head = idx + 4;          // advance past CRLFCRLF
+            
+            // Build the response
 
             // Try to send the entire prebuilt 200 OK response immediately.
             int sent = 0;
             for (;;)
             {
                 long n = send(fd, (IntPtr)(_p200 + sent), (ulong)(_len200 - sent), MSG_NOSIGNAL);
-                if (n > 0) { sent += (int)n; if (sent == _len200) break; continue; }
+                if (n > 0)
+                {
+                    sent += (int)n; 
+                    if (sent == _len200) 
+                        break; 
+                    
+                    continue; 
+                    
+                }
                 int err = (n == 0) ? EAGAIN : Marshal.GetLastPInvokeError();
                 if (err == EAGAIN)
                 {
@@ -374,6 +386,7 @@ internal static unsafe class Program
                     epoll_ctl(W.Ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
                     return true; // will resume in the EPOLLOUT path
                 }
+                
                 // On any other error, close and report as handled.
                 CloseConn(fd, conns, W);
                 return true;
@@ -385,6 +398,11 @@ internal static unsafe class Program
             if (c.Head > 0) c.CompactIfNeeded();
             // Loop to handle any next pipelined request already in the buffer.
         }
+    }
+
+    private static void CreateResponse()
+    {
+        
     }
 
     // ===== Close helpers =====
