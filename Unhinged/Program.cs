@@ -277,8 +277,7 @@ internal static unsafe class Program
                         throw new NotImplementedException("No available space in the receiving buffer");
                         
                         // Check if there are requests available to be handled
-                        TryServeBufferedRequests(c, fd, W, conns);
-                        continue;
+                        // TODO: Implement this
 
                         // If not, resize the receiving buffer (very difficult if dealing with stack allocated buffer)
                     }
@@ -312,7 +311,12 @@ internal static unsafe class Program
                         fixed (byte* p = &c.Buf[c.Tail])
                             got = recv(fd, (IntPtr)p, (ulong)avail, 0);
 
-                        if (got > 0) continue;
+                        if (got > 0)
+                        {
+                            c.Tail += (int)got;
+                            continue;
+                            
+                        }
                         if (got == 0) { CloseConn(fd, conns, W); break; } // peer closed
                         
                         int err = Marshal.GetLastPInvokeError();
@@ -338,19 +342,24 @@ internal static unsafe class Program
                         if (tryEmptyResult == EmptyAttemptResult.Complete)
                         {
                             // All requests were flushed, stay EPOLLIN
+                            // Move on to the next event
+                            continue;
                         }
-
                         if (tryEmptyResult == EmptyAttemptResult.Incomplete)
                         {
                             // There is still data to be flushed in the buffer, arm EPOLLOUT
                             ArmEpollOut(ref fd, W.Ep);
-                        }
 
+                            continue;
+                        }
                         if (tryEmptyResult == EmptyAttemptResult.CloseConnection)
                         {
                             CloseConn(fd, conns, W);
+                            continue;
                         }
                     }
+                    
+                    // Move on to the next event...
                     continue;
                     
                     for (;;)
@@ -387,6 +396,28 @@ internal static unsafe class Program
                 if ((evs & EPOLLOUT) != 0)
                 {
                     if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd); continue; }
+                    
+                    var tryEmptyResult = TryEmptyWriteBuffer(c, ref fd);
+                    if (tryEmptyResult == EmptyAttemptResult.Complete)
+                    {
+                        // All requests were flushed, arm EPOLLIN
+                        // Move on to the next event
+                        ArmEpollIn(ref fd, W.Ep);
+                        continue;
+                    }
+                    if (tryEmptyResult == EmptyAttemptResult.Incomplete)
+                    {
+                        // There is still data to be flushed in the buffer, stay EPOLLOUT
+                        continue;
+                    }
+                    if (tryEmptyResult == EmptyAttemptResult.CloseConnection)
+                    {
+                        CloseConn(fd, conns, W);
+                        continue;
+                    }
+                    
+                    continue;
+                    
                     if (!c.WantWrite)
                     {
                         // No pending write: go back to read mode.
@@ -587,7 +618,8 @@ internal static unsafe class Program
     private static void CommitResponse(Connection connection)
     {
         //TODO: Parse route
-        CommitPlainTextResponse(connection);
+        //CommitPlainTextResponse(connection);
+        CommitJsonResponse(connection);
     }
     private struct JsonMessage { internal string Message; }
     private static void CommitJsonResponse(Connection connection)
@@ -617,7 +649,7 @@ internal static unsafe class Program
                                      "Content-Length: 13\r\n\r\n"u8 +
                                      "Hello, World!"u8);
     }
-
+    
     // ===== Close helpers =====
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void CloseConn(int fd, Dictionary<int, Connection> map, Worker W)
