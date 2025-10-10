@@ -1,3 +1,4 @@
+using System.Numerics;
 using static Unhinged.Native;
 using static Unhinged.ProcessorArchDependant;
 
@@ -10,6 +11,45 @@ internal sealed unsafe class Worker : IDisposable
 {
     // Worker index (for logging, load balancing, etc.)
     internal readonly int Index;
+
+    internal readonly int MaxConnections;
+    private readonly ulong[] ConnectionStates;
+    
+    public int GetFirstFreeConnectionIndex()
+    {
+        for (int i = 0; i < ConnectionStates.Length; i++)
+        {
+            ulong bits = ConnectionStates[i];
+            
+            if (bits == ulong.MaxValue) 
+                continue; // there is at least one 0-bit
+            
+            ulong freeMask = ~bits;
+            int bitIndex = BitOperations.TrailingZeroCount(freeMask); // index of first free in this block
+            int index = (i << 6) + bitIndex;
+            
+            if (index >= MaxConnections) 
+                continue;
+            
+            ConnectionStates[i] = bits | (1UL << bitIndex); // MARK USED
+            return index;
+        }
+        return -1; // no free
+    }
+
+    public void Free(int index)
+    {
+        int block = index >> 6;
+        int bit = index & 63;
+        ConnectionStates[block] &= ~(1UL << bit);
+    }
+
+    public bool IsUsed(int index)
+    {
+        int block = index >> 6;
+        int bit = index & 63;
+        return ((ConnectionStates[block] >> bit) & 1UL) != 0;
+    }
 
     // The epoll file descriptor created by epoll_create1().
     // Each worker has its own epoll instance and waits on it in its own thread.
@@ -43,10 +83,15 @@ internal sealed unsafe class Worker : IDisposable
     /// - allocates an events buffer to read epoll_wait() results,
     /// - and can be notified via its NotifyEfd to adopt new connections.
     /// </summary>
-    internal Worker(int idx, int maxEvents)
+    internal Worker(int idx, int maxEvents, int maxConnections = 64)
     {
         Index = idx;
         MaxEvents = maxEvents;
+        MaxConnections  = maxConnections;
+        
+        // All connections initialize as false (free)
+        // This is a helper array to help attributing an index to each connection so that we can slice the byte*
+        ConnectionStates =  new ulong[(maxConnections + 63) / 64];
 
         // Create epoll instance with CLOEXEC flag (auto-close on exec).
         Ep = epoll_create1(EPOLL_CLOEXEC);

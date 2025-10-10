@@ -7,20 +7,23 @@ namespace Unhinged;
 internal sealed unsafe class Connection
 {
     internal int Fd;
+
+    //internal int Index;
     
     // Reading Buffer
-    internal byte[] Buf = new byte[4096];
+    //internal byte* RecBuf;
+    //internal int RecHead, RecTail;
+    
+    internal byte[] Buf = new byte[4096 * 16];
     internal int Head, Tail;     // [Head..Tail) valid
     
     // Writing Buffer
     // When response data is calculated, should be written into this buffer
-    internal byte* WrBuf;
+    internal FixedBufferWriter WriteBuffer;
+    //internal byte* WrBuf;
     
     internal bool WantWrite;
     internal int RespSent;
-
-    // How many bytes were already sent 
-    internal int wrHead;
     
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void CompactIfNeeded()

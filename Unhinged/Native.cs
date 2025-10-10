@@ -1,40 +1,26 @@
 namespace Unhinged;
 
-internal static class Native
+internal static unsafe class Native
 {
     // ===== P/Invoke =====
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int socket(int domain, int type, int protocol);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int bind(int sockfd, ref sockaddr_in addr, uint addrlen);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int listen(int sockfd, int backlog);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int accept4(int sockfd, IntPtr addr, IntPtr addrlen, int flags);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int setsockopt(int sockfd, int level, int optname, ref int optval, uint optlen);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int setsockopt(int sockfd, int level, int optname, ref Linger optval, uint optlen);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int fcntl(int fd, int cmd, int arg);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int close(int fd);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern long read(int fd, IntPtr buf, ulong count);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern long write(int fd, IntPtr buf, ulong count);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern long recv(int sockfd, IntPtr buf, ulong len, int flags);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern long send(int sockfd, IntPtr buf, ulong len, int flags);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int epoll_create1(int flags);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int epoll_ctl(int epfd, int op, int fd, IntPtr ev);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int epoll_wait(int epfd, IntPtr events, int maxevents, int timeout);
-    [DllImport("libc", SetLastError = true)] 
-    internal static extern int eventfd(uint initval, int flags);
+    [DllImport("libc", SetLastError = true)] internal static extern int socket(int domain, int type, int protocol);
+    [DllImport("libc", SetLastError = true)] internal static extern int bind(int sockfd, ref sockaddr_in addr, uint addrlen);
+    [DllImport("libc", SetLastError = true)] internal static extern int listen(int sockfd, int backlog);
+    [DllImport("libc", SetLastError = true)] internal static extern int accept4(int sockfd, IntPtr addr, IntPtr addrlen, int flags);
+    [DllImport("libc", SetLastError = true)] internal static extern int setsockopt(int sockfd, int level, int optname, ref int optval, uint optlen);
+    [DllImport("libc", SetLastError = true)] internal static extern int setsockopt(int sockfd, int level, int optname, ref Linger optval, uint optlen);
+    [DllImport("libc", SetLastError = true)] internal static extern int fcntl(int fd, int cmd, int arg);
+    [DllImport("libc", SetLastError = true)] internal static extern int close(int fd);
+    [DllImport("libc", SetLastError = true)] internal static extern long read(int fd, IntPtr buf, ulong count);
+    [DllImport("libc", SetLastError = true)] internal static extern long write(int fd, IntPtr buf, ulong count);
+    [DllImport("libc", SetLastError = true)] internal static extern long recv(int sockfd, IntPtr buf, ulong len, int flags);
+    [DllImport("libc", SetLastError = true)] internal static extern long send(int sockfd, IntPtr buf, ulong len, int flags);
+    [DllImport("libc", SetLastError = true)] internal static extern long send(int sockfd, byte* buf, long len, int flags);
+    [DllImport("libc", SetLastError = true)] public static extern nint send(int sockfd, void* buf, nuint len, int flags);
+    [DllImport("libc", SetLastError = true)] internal static extern int epoll_create1(int flags);
+    [DllImport("libc", SetLastError = true)] internal static extern int epoll_ctl(int epfd, int op, int fd, IntPtr ev);
+    [DllImport("libc", SetLastError = true)] internal static extern int epoll_wait(int epfd, IntPtr events, int maxevents, int timeout);
+    [DllImport("libc", SetLastError = true)] internal static extern int eventfd(uint initval, int flags);
     
     // ===== structs & constants =====
     [StructLayout(LayoutKind.Sequential)]
