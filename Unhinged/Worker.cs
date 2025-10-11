@@ -1,4 +1,3 @@
-using System.Numerics;
 using static Unhinged.Native;
 using static Unhinged.ProcessorArchDependant;
 
@@ -12,6 +11,8 @@ internal sealed unsafe class Worker : IDisposable
     // Worker index (for logging, load balancing, etc.)
     internal readonly int Index;
 
+    /* Dropped this, memory slabs are no longer indexable, using per connection pinned allocation
+     
     internal readonly int MaxConnections;
     private readonly ulong[] ConnectionStates;
     
@@ -50,6 +51,7 @@ internal sealed unsafe class Worker : IDisposable
         int bit = index & 63;
         return ((ConnectionStates[block] >> bit) & 1UL) != 0;
     }
+    */
 
     // The epoll file descriptor created by epoll_create1().
     // Each worker has its own epoll instance and waits on it in its own thread.
@@ -87,11 +89,11 @@ internal sealed unsafe class Worker : IDisposable
     {
         Index = idx;
         MaxEvents = maxEvents;
-        MaxConnections  = maxConnections;
         
+        //MaxConnections  = maxConnections;
         // All connections initialize as false (free)
         // This is a helper array to help attributing an index to each connection so that we can slice the byte*
-        ConnectionStates =  new ulong[(maxConnections + 63) / 64];
+        //ConnectionStates =  new ulong[(maxConnections + 63) / 64];
 
         // Create epoll instance with CLOEXEC flag (auto-close on exec).
         Ep = epoll_create1(EPOLL_CLOEXEC);

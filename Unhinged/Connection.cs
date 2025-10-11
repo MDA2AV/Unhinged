@@ -1,34 +1,25 @@
 namespace Unhinged;
 
-internal ref struct Connection
+internal unsafe class Connection : IDisposable
 {
-    //internal int Fd;
-    //internal int Index;
-    // Reading Buffer
-    //internal byte* RecBuf;
-    //internal int RecHead, RecTail;
-    
-    internal byte[] Buf = new byte[4096 * 16];
-    internal int Head, Tail;     // [Head..Tail) valid
-
-    public Connection()
-    {
-        
-    }
-    
+    internal int Head, Tail;     // [Head..Tail] valid
+    internal readonly byte* RecBuf;
     internal FixedBufferWriter WriteBuffer;
     
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void CompactIfNeeded()
+    public Connection(int maxConnections, int inSlabSize, int outSlabSize)
     {
-        if (Head > 0 && Head < Tail)
-        {
-            Buffer.BlockCopy(Buf, Head, Buf, 0, Tail - Head);
-            Tail -= Head; Head = 0;
-        }
-        else if (Head >= Tail)
-        {
-            Head = Tail = 0; 
-        }
+        RecBuf = (byte*)NativeMemory.AlignedAlloc((nuint)(maxConnections * inSlabSize),  64);
+        WriteBuffer = new FixedBufferWriter(
+            (byte*)NativeMemory.AlignedAlloc((nuint)(maxConnections * outSlabSize),  64), 
+            outSlabSize);
+    }
+
+    public void Dispose()
+    {
+        // Dispose unmanaged buffers
+        if (RecBuf != null)
+            NativeMemory.AlignedFree(RecBuf);
+        
+        WriteBuffer.Dispose();
     }
 }

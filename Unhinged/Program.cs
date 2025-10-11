@@ -1,7 +1,4 @@
-﻿using System.Buffers;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using static Unhinged.Native;
+﻿using static Unhinged.Native;
 using static Unhinged.HeaderParsing;
 using static Unhinged.ProcessorArchDependant;
 
@@ -14,46 +11,12 @@ namespace Unhinged;
 
 [SkipLocalsInit] internal static unsafe class Program
 {
-    /*
-     * ================================ OVERVIEW ==================================
-     * This program implements a high‑performance HTTP/1.1 server using Linux epoll
-     * from C# via P/Invoke. The design is split into:
-     *   - A single Acceptor thread:
-     *       * epoll-waits the listening socket for EPOLLIN
-     *       * accept4() new connections in non-blocking mode
-     *       * load-balances accepted sockets to Worker threads using a simple
-     *         "least busy" heuristic
-     *       * wakes the chosen Worker via an eventfd (NotifyEfd)
-     *
-     *   - N Worker threads (N = workers):
-     *       * Each Worker owns its own epoll instance (W.Ep)
-     *       * Maintains a connection map (fd -> Connection)
-     *       * Handles read-ready (EPOLLIN) and write-ready (EPOLLOUT) events
-     *       * Parses HTTP headers by scanning for CRLFCRLF (\r\n\r\n)
-     *       * Sends a prebuilt 200 OK response (pinned in memory to avoid copies)
-     *       * Handles backpressure: if send() would block, arms EPOLLOUT and
-     *         resumes when the socket becomes writable.
-     *
-     * Pinned response buffers:
-     *   Pre-constructed HTTP responses are pinned to avoid GC relocations and to
-     *   enable passing stable pointers directly to send().
-     *
-     * Memory strategy per connection:
-     *   * Each Connection holds a byte[] buffer with head/tail indices.
-     *   * We compact or grow the buffer up to MaxHeader (16 KiB) as needed.
-     *   * Once CRLFCRLF is found, we immediately attempt to write the response.
-     *
-     * Error handling:
-     *   * On errors like EPOLLERR/EPOLLHUP/EPOLLRDHUP or EPIPE/ECONNRESET, we
-     *     close the fd and decrement the Worker load counter.
-     *
-     * Concurrency model:
-     *   * The acceptor serializes acceptance and handoff.
-     *   * Workers run independently; a connection is owned by exactly one Worker.
-     * ==========================================================================
-     */
-
     private const int Backlog = 16384; // listen() backlog hint to the kernel
+    private const int MaxNumberConnectionsPerWorker = 512;
+    private const int InSlabSize = 16 * 1024;
+    private const int OutSlabSize = 16 * 1024;
+    private const int MaxEventsPerWake = 512;
+    private const int MaxStackSizePerThread = 1024 * 1024;
 
     // ===== Entry point =====
     public static void Main(string[] args)
@@ -71,9 +34,9 @@ namespace Unhinged;
         var W = new Worker[workers];
         for (int i = 0; i < workers; i++)
         {
-            W[i] = new Worker(i, 512, 64); // MaxEvents per epoll_wait for this worker
+            W[i] = new Worker(i, MaxEventsPerWake, 64); // MaxEvents per epoll_wait for this worker
             int iCap = i; // capture loop variable safely
-            var t = new Thread(() => WorkerLoop(W[iCap]), 10 * 1024 * 1024) // 10MB
+            var t = new Thread(() => WorkerLoop(W[iCap]), MaxStackSizePerThread) // 1MB
             {
                 IsBackground = true, Name = $"worker-{iCap}" 
             };
@@ -130,14 +93,14 @@ namespace Unhinged;
         if (epoll_ctl(ep, EPOLL_CTL_ADD, listenFd, (IntPtr)ev) != 0)
             throw new Exception("epoll_ctl ADD listen failed");
 
-        // Buffer to receive epoll events (capacity for 128 events per wait call).
-        // NOTE: 128 is an operational batch size, not an OS limit. Increase if needed.
-        IntPtr eventsBuf = Marshal.AllocHGlobal(EvSize * 128);
+        // Buffer to receive epoll events (capacity for MaxEventsPerWake events per wait call).
+        // NOTE: MaxEventsPerWake is an operational batch size, not an OS limit. Increase if needed.
+        IntPtr eventsBuf = Marshal.AllocHGlobal(EvSize * MaxEventsPerWake);
 
         for (;;)
         {
             // Block until at least one event is available on the listening epoll set.
-            int n = epoll_wait(ep, eventsBuf, 128, -1);
+            int n = epoll_wait(ep, eventsBuf, MaxEventsPerWake, -1);
             if (n < 0) { if (Marshal.GetLastPInvokeError() == EINTR) continue; throw new Exception("epoll_wait acceptor"); }
 
             for (int i = 0; i < n; i++)
@@ -163,7 +126,7 @@ namespace Unhinged;
                         int w = ChooseLeastBusy(workers);
                         workers[w].Inbox.Enqueue(cfd);            // hand off fd to worker queue
                         Interlocked.Increment(ref workers[w].Current); // bump worker load metric
-                        Console.WriteLine($"Incremented {workers[w].Ep} with cfg {cfd} to {workers[w].Current}");
+                        //Console.WriteLine($"Incremented {workers[w].Ep} with cfg {cfd} to {workers[w].Current}");
 
                         // Wake the worker via eventfd. We write 8 bytes (uint64).
                         ulong inc = 1;
@@ -173,7 +136,7 @@ namespace Unhinged;
 
                     int err = Marshal.GetLastPInvokeError();
                     if (err == EINTR) continue;                  // retry
-                    if (err == EAGAIN || err == EWOULDBLOCK) break; // no more to accept right now
+                    if (err is EAGAIN or EWOULDBLOCK) break; // no more to accept right now
                     // On transient or unexpected accept error, break to next epoll tick.
                     break;
                 }
@@ -193,17 +156,24 @@ namespace Unhinged;
         return best;
     }
     
-    private const int wrStackSize = 1024;
-    private const int recStackSize = 1024 * 16;
+    private static readonly ObjectPool<Connection> ConnectionPool =
+        new DefaultObjectPool<Connection>(new ConnectionPoolPolicy(), 1024*32);
+
+    private class ConnectionPoolPolicy : PooledObjectPolicy<Connection>
+    {
+        public override Connection Create() => new(MaxNumberConnectionsPerWorker, InSlabSize, OutSlabSize);
+        public override bool Return(Connection context)
+        {
+            // Potentially reset buffers here.
+            return true;
+        }
+    }
 
     // ===== Worker loop =====
     private static void WorkerLoop(Worker W)
     {
         // Per-worker connection table
-        var conns = new Dictionary<int, Connection>(capacity: W.MaxConnections);
-        
-        byte* sendBufferOrigin = stackalloc byte[1024 * W.MaxConnections];
-        byte* readBufferOrigin = stackalloc byte[1024 * 16 * W.MaxConnections];
+        var conns = new Dictionary<int, Connection>(capacity: MaxNumberConnectionsPerWorker);
         
         for (;;)
         {
@@ -231,12 +201,13 @@ namespace Unhinged;
                         
                         // Adding a new connection to the pool, setting the file descriptor for the client socket 
                         // and the byte* pointing to the stack allocated write buffer segment
-                        var connectionIndex = W.GetFirstFreeConnectionIndex();
-                        conns[cfd] = new Connection
+                        //var connectionIndex = W.GetFirstFreeConnectionIndex();
+                        //conns[cfd] = new Connection(MaxNumberConnectionsPerWorker, InSlabSize, OutSlabSize);
+                        /*if (!conns.TryGetValue(cfd, out var conn))
                         {
-                            //Fd = cfd, 
-                            WriteBuffer = new FixedBufferWriter(sendBufferOrigin + (connectionIndex * wrStackSize), wrStackSize)
-                        };
+                            conns[cfd] = new Connection(MaxNumberConnectionsPerWorker, InSlabSize, OutSlabSize);
+                        }*/
+                        conns[cfd] = ConnectionPool.Get();
                     }
                     continue;
                 }
@@ -251,11 +222,12 @@ namespace Unhinged;
                 // 3) Read-ready path
                 if ((evs & EPOLLIN) != 0)
                 {
-                    if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd); continue; }
+                    if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd, conns); continue; }
 
                     // Ensure free space at the tail; compact or grow if necessary.
                     // TODO: This logic needs rework, doesn't sense
-                    int avail = c.Buf.Length - c.Tail;
+                    //int avail = c.Buf.Length - c.Tail;
+                    int avail = InSlabSize - c.Tail;
                     
                     // If the receiving buffer has no space available, that means that either there are
                     // a lot of requests to be served, or a huge request is being received and is larger than the array size.
@@ -275,8 +247,9 @@ namespace Unhinged;
                     while (true)
                     {
                         long got;
-                        fixed (byte* p = &c.Buf[c.Tail])
-                            got = recv(fd, (IntPtr)p, (ulong)avail, 0);
+                        //fixed (byte* p = &c.Buf[c.Tail])
+                        //    got = recv(fd, (IntPtr)p, (ulong)avail, 0);
+                        got = recv(fd, c.RecBuf, (ulong)avail, 0);
 
                         if (got > 0)
                         {
@@ -333,7 +306,7 @@ namespace Unhinged;
                 // 4) Write-ready path
                 if ((evs & EPOLLOUT) != 0)
                 {
-                    if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd); continue; }
+                    if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd, conns); continue; }
                     
                     var tryEmptyResult = TryEmptyWriteBuffer(c, ref fd);
                     if (tryEmptyResult == EmptyAttemptResult.Complete)
@@ -381,7 +354,8 @@ namespace Unhinged;
         while (true)
         {
             // Try getting a full request header, if unsuccessful signal caller more data is needed
-            int idx = FindCrlfCrlf(connection.Buf, connection.Head, connection.Tail);
+            //int idx = FindCrlfCrlf(connection.Buf, connection.Head, connection.Tail);
+            int idx = FindCrlfCrlf(connection.RecBuf, connection.Head, connection.Tail);
             if (idx < 0)
                 break;
             connection.Head = idx + 4; // advance past CRLFCRLF
@@ -396,14 +370,11 @@ namespace Unhinged;
         // Move the incomplete request to the buffer start and reset head and tail to 0
         if (connection.Head > 0 && connection.Head < connection.Tail)
         {
-            Array.Copy(
-                connection.Buf, 
-                connection.Head, 
-                connection.Buf, 
-                0, 
+            Buffer.MemoryCopy(
+                connection.RecBuf + connection.Head, 
+                connection.RecBuf, 
+                InSlabSize, 
                 connection.Tail - connection.Head);
-            // For byte* use Buffer.MemoryCopy
-            //Buffer.MemoryCopy(connection.RecBuf + connection.RecHead, connection.RecBuf, recStackSize, connection.Tail - connection.RecHead);
         }
         
         //Reset the receiving buffer
@@ -412,9 +383,7 @@ namespace Unhinged;
     }
 
     private enum EmptyAttemptResult { Complete, Incomplete, CloseConnection }
-    // Tries to empty the writing buffer until all data sent or EAGAIN
-    // If all data was sent, back to EPOLLIN
-    // If EAGAIN is hit, stay EPOLLOUT
+
     private static EmptyAttemptResult TryEmptyWriteBuffer(Connection connection, ref int fd)
     {
         while (true)
@@ -513,11 +482,12 @@ namespace Unhinged;
     private static void CloseConn(int fd, Dictionary<int, Connection> map, Worker W)
     {
         // Remove from map, close fd, and decrement the worker's load counter.
+        ConnectionPool.Return(map[fd]);
         map.Remove(fd);
-        CloseQuiet(fd);
+        CloseQuiet(fd, map);
         Interlocked.Decrement(ref W.Current);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void CloseQuiet(int fd) { try { close(fd); } catch { } }
+    private static void CloseQuiet(int fd, Dictionary<int, Connection> map) { try { close(fd); } catch { } }
 }
