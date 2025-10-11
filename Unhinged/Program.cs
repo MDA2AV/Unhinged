@@ -1,16 +1,18 @@
 ﻿using System.Buffers;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using static Unhinged.Native;
 using static Unhinged.HeaderParsing;
-using static Unhinged.ResponseBuilder;
 using static Unhinged.ProcessorArchDependant;
 
 namespace Unhinged;
 
 // ReSharper disable always SuggestVarOrType_BuiltInTypes
 // (var is avoided intentionally in this project so that concrete types are visible at call sites.)
+// ReSharper disable always StackAllocInsideLoop
+#pragma warning disable CA2014
 
-internal static unsafe class Program
+[SkipLocalsInit] internal static unsafe class Program
 {
     /*
      * ================================ OVERVIEW ==================================
@@ -51,28 +53,14 @@ internal static unsafe class Program
      * ==========================================================================
      */
 
-    // ===== HTTP response buffers (pinned) =====
-    // Build and pin a success response so we can send via raw pointer without extra copies.
-    private static readonly byte[] _response200 = Build200();
-    private static readonly GCHandle _h200 = GCHandle.Alloc(_response200, GCHandleType.Pinned);
-    private static readonly byte* _p200 = (byte*)_h200.AddrOfPinnedObject();
-    private static readonly int _len200 = _response200.Length;
-
-    // Build and pin a 431 response for oversized headers.
-    private static readonly byte[] _response431 = BuildSimpleResponse(431, "Request Header Fields Too Large");
-    private static readonly GCHandle _h431 = GCHandle.Alloc(_response431, GCHandleType.Pinned);
-    private static readonly byte* _p431 = (byte*)_h431.AddrOfPinnedObject();
-    private static readonly int _len431 = _response431.Length;
-
     private const int Backlog = 16384; // listen() backlog hint to the kernel
-    private const int MaxHeader = 16 * 1024; // cap for header buffer growth per connection
 
     // ===== Entry point =====
     public static void Main(string[] args)
     {
         Console.WriteLine($"Arch={RuntimeInformation.ProcessArchitecture}, Packed={(Packed ? 12 : 16)}-byte epoll_event");
 
-        int port = 8085;
+        const int port = 8080;
         // Choose a bounded number of workers (heuristic tuned for moderate -c values like 512)
         int workers = Math.Max(8, Math.Min(Environment.ProcessorCount / 2, 16)); // good start for -c512
         
@@ -85,7 +73,7 @@ internal static unsafe class Program
         {
             W[i] = new Worker(i, 512, 64); // MaxEvents per epoll_wait for this worker
             int iCap = i; // capture loop variable safely
-            var t = new Thread(() => WorkerLoop(W[iCap]), 10 * 1024 * 1024)
+            var t = new Thread(() => WorkerLoop(W[iCap]), 10 * 1024 * 1024) // 10MB
             {
                 IsBackground = true, Name = $"worker-{iCap}" 
             };
@@ -246,7 +234,7 @@ internal static unsafe class Program
                         var connectionIndex = W.GetFirstFreeConnectionIndex();
                         conns[cfd] = new Connection
                         {
-                            Fd = cfd, 
+                            //Fd = cfd, 
                             WriteBuffer = new FixedBufferWriter(sendBufferOrigin + (connectionIndex * wrStackSize), wrStackSize)
                         };
                     }
@@ -282,28 +270,7 @@ internal static unsafe class Program
                         // If not, resize the receiving buffer (very difficult if dealing with stack allocated buffer)
                     }
                     
-                    /*if (avail == 0)
-                    {
-                        if (c.Head > 0) { c.CompactIfNeeded(); avail = c.Buf.Length - c.Tail; }
-                        if (avail == 0)
-                        {
-                            int used = c.Tail - c.Head;
-                            if (used >= MaxHeader)
-                            {
-                                // Headers too large → send 431 and close.
-                                send(fd, (IntPtr)_p431, (ulong)_len431, MSG_NOSIGNAL);
-                                CloseConn(fd, conns, W);
-                                continue;
-                            }
-                            // Grow buffer but never exceed MaxHeader.
-                            Array.Resize(ref c.Buf, Math.Min(Math.Max(c.Buf.Length * 2, c.Buf.Length + 1024), MaxHeader));
-                            avail = c.Buf.Length - c.Tail;
-                            if (avail == 0) continue; // no space even after resize; bail out for now.
-                        }
-                    }*/
-
                     // Read as much as possible until EAGAIN or buffer is full.
-
                     // Read until EAGAIN (socket drained)
                     while (true)
                     {
@@ -361,35 +328,6 @@ internal static unsafe class Program
                     
                     // Move on to the next event...
                     continue;
-                    
-                    for (;;)
-                    {
-                        long got;
-                        fixed (byte* p = &c.Buf[c.Tail])
-                            got = recv(fd, (IntPtr)p, (ulong)avail, 0);
-
-                        if (got > 0)
-                        {
-                            c.Tail += (int)got;
-                            // Try to parse and respond to any complete requests already buffered.
-                            if (TryServeBufferedRequests(c, fd, W, conns))
-                                break; // Response requires EPOLLOUT; stop reading now.
-
-                            // If there is still room, continue reading in this loop.
-                            avail = c.Buf.Length - c.Tail;
-                            if (avail == 0) break;
-                            continue;
-                        }
-                        else if (got == 0) { CloseConn(fd, conns, W); break; } // peer closed
-                        else
-                        {
-                            int err = Marshal.GetLastPInvokeError();
-                            if (err == EAGAIN || err == EWOULDBLOCK) break; // socket would block
-                            if (err == ECONNRESET || err == ECONNABORTED || err == EPIPE) { CloseConn(fd, conns, W); break; }
-                            CloseConn(fd, conns, W); break; // default: close on unexpected errors
-                        }
-                    }
-                    continue;
                 }
 
                 // 4) Write-ready path
@@ -415,47 +353,6 @@ internal static unsafe class Program
                         CloseConn(fd, conns, W);
                         continue;
                     }
-                    
-                    continue;
-                    
-                    if (!c.WantWrite)
-                    {
-                        // No pending write: go back to read mode.
-                        byte* ev = stackalloc byte[EvSize];
-                        WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
-                        epoll_ctl(W.Ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
-                        continue;
-                    }
-
-                    // Attempt to flush the remainder of the response.
-                    for (;;)
-                    {
-                        long nSent = send(fd, (IntPtr)(_p200 + c.RespSent), (ulong)(_len200 - c.RespSent), MSG_NOSIGNAL);
-                        if (nSent > 0)
-                        {
-                            c.RespSent += (int)nSent;
-                            if (c.RespSent == _len200)
-                            {
-                                // Response fully flushed. Switch back to EPOLLIN.
-                                c.WantWrite = false;
-                                c.RespSent = 0;
-
-                                byte* ev = stackalloc byte[EvSize];
-                                WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
-                                epoll_ctl(W.Ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
-
-                                // If there are more pipelined requests in the buffer, serve them.
-                                TryServeBufferedRequests(c, fd, W, conns);
-                                break;
-                            }
-                            continue; // still have bytes to send; loop
-                        }
-                        int err = (nSent == 0) ? EAGAIN : Marshal.GetLastPInvokeError();
-                        if (err == EAGAIN) break; // stay armed for EPOLLOUT
-                        if (err is EPIPE or ECONNRESET) { CloseConn(fd, conns, W); break; }
-                        CloseConn(fd, conns, W); break;
-                    }
-                    continue;
                 }
             }
         }
@@ -562,78 +459,39 @@ internal static unsafe class Program
             return EmptyAttemptResult.CloseConnection;
         }
     }
-    
-    // ===== HTTP request parse + send (CRLFCRLF) =====
-    private static bool TryServeBufferedRequests(Connection c, int fd, Worker W, Dictionary<int, Connection> conns)
-    {
-        // Process as many complete requests as are already buffered (HTTP pipelining).
-        for (;;)
-        {
-            // Look for the end of headers (\r\n\r\n). Returns index or -1 if not found.
-            int idx = FindCrlfCrlf(c.Buf, c.Head, c.Tail);
-            if (idx < 0) return false; // need more data
-            c.Head = idx + 4;          // advance past CRLFCRLF
-            
-            // Build the response
-
-            // Try to send the entire prebuilt 200 OK response immediately.
-            int sent = 0;
-            for (;;)
-            {
-                long n = send(fd, (IntPtr)(_p200 + sent), (ulong)(_len200 - sent), MSG_NOSIGNAL);
-                if (n > 0)
-                {
-                    sent += (int)n; 
-                    if (sent == _len200) 
-                        break; 
-                    
-                    continue; 
-                    
-                }
-                int err = (n == 0) ? EAGAIN : Marshal.GetLastPInvokeError();
-                if (err == EAGAIN)
-                {
-                    // Socket not currently writable → remember offset and arm EPOLLOUT
-                    c.WantWrite = true;
-                    c.RespSent = sent;
-                    byte* ev = stackalloc byte[EvSize];
-                    WriteEpollEvent(ev, EPOLLOUT | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
-                    epoll_ctl(W.Ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
-                    return true; // will resume in the EPOLLOUT path
-                }
-                
-                // On any other error, close and report as handled.
-                CloseConn(fd, conns, W);
-                return true;
-            }
-
-            // If we reach here, the response was fully sent synchronously.
-            // Reset/compact the buffer for potential additional pipelined requests.
-            if (c.Head >= c.Tail) { c.Head = c.Tail = 0; return false; }
-            if (c.Head > 0) c.CompactIfNeeded();
-            // Loop to handle any next pipelined request already in the buffer.
-        }
-    }
 
     private static void CommitResponse(Connection connection)
     {
         //TODO: Parse route
-        //CommitPlainTextResponse(connection);
-        CommitJsonResponse(connection);
+        CommitPlainTextResponse(connection);
+        //CommitJsonResponse(connection);
     }
-    private struct JsonMessage { internal string Message; }
+    
     private static void CommitJsonResponse(Connection connection)
     {
-        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
-                                     "Content-Type: application/json; charset=UTF-8\r\n"u8 +
-                                     "Content-Length: 27\r\n"u8 +
-                                     "Connection: keep-alive\r\n"u8 +
-                                     "\r\n"u8);
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: application/json; charset=UTF-8\r\n"u8 +
+                                              "Content-Length: 27\r\n"u8 +
+                                              //"Connection: keep-alive\r\n"u8 +
+                                              "\r\n"u8);
         
         var message = new JsonMessage { Message = "Hello, World!" };
         
-        using var writer = new Utf8JsonWriter(connection.WriteBuffer);
-        JsonSerializer.Serialize(writer, message);
+        /*
+        var writer = new SimpleJsonWriter(connection.WriteBuffer);
+        
+        writer.WriteStartObject();
+        writer.WritePropertyName("Message");
+        writer.WriteStringValue("Hello, World!");
+        writer.WriteEndObject();
+        */
+        
+        //var serialized = JsonSerializer.Serialize(message, SerializerContext.JsonMessage);
+        //using var writer = new Utf8JsonWriter(connection.WriteBuffer);
+        //JsonSerializer.Serialize(writer, message, SerializerContext.JsonMessage);
+        //Console.WriteLine($"Writer hash: {connection.WriteBuffer.GetHash}");
+        //Console.WriteLine($"Tail: {Volatile.Read(ref connection.Tail)}");
         
         /*using var stream = new UnmanagedMemoryStream(c.WrBuf, 1024, 1024, FileAccess.Write);
         using var writer = new Utf8JsonWriter(stream);
@@ -643,11 +501,11 @@ internal static unsafe class Program
 
     private static void CommitPlainTextResponse(Connection connection)
     {
-        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
-                                     "Server: K\r\n"u8 +
-                                     "Content-Type: text/plain\r\n"u8 +
-                                     "Content-Length: 13\r\n\r\n"u8 +
-                                     "Hello, World!"u8);
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: text/plain\r\n"u8 +
+                                              "Content-Length: 13\r\n\r\n"u8 +
+                                              "Hello, World!"u8);
     }
     
     // ===== Close helpers =====

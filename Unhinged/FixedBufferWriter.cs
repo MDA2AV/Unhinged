@@ -1,31 +1,20 @@
-using System.Buffers;
-
 namespace Unhinged;
 
-internal unsafe struct FixedBufferWriter : IBufferWriter<byte>
+[SkipLocalsInit]
+internal unsafe ref struct FixedBufferWriter : IUnmanagedBufferWriter<byte>
 {
     private readonly int _capacity;
-
-    internal int Head;
-
-    public FixedBufferWriter(byte* ptr, int capacity)
-    {
-        Ptr = ptr;
-        _capacity = capacity;
-        Tail = 0;
-
-        Head = 0;
-    }
     
-    internal void Reset() {
-        Tail = 0;
-        Head = 0;
-    }
-
+    internal int Head;
     internal int Tail { get; private set; }
     internal byte* Ptr { get; }
 
+    public FixedBufferWriter(byte* ptr, int capacity) { Ptr = ptr; _capacity = capacity; Reset(); }
+    
+    internal void Reset() { Tail = 0; Head = 0; }
     public void Advance(int count) => Tail += count;
+    
+    public byte* GetPointer() => Ptr;
 
     public Span<byte> GetSpan(int sizeHint = 0)
     {
@@ -35,10 +24,18 @@ internal unsafe struct FixedBufferWriter : IBufferWriter<byte>
         return new Span<byte>(Ptr + Tail, _capacity - Tail);
     }
 
-    public Memory<byte> GetMemory(int sizeHint = 0) =>
-        throw new NotSupportedException();
+    public void WriteUnmanaged(ReadOnlySpan<byte> source)
+    {
+        if (Tail + source.Length > _capacity)
+            throw new InvalidOperationException("Buffer too small.");
+        
+        fixed (byte* src = source)
+            Buffer.MemoryCopy(src, Ptr + Tail, _capacity - Tail, source.Length);
+        
+        Tail += source.Length;
+    }
     
-    internal void Write(ReadOnlySpan<byte> source)
+    public void Write(ReadOnlySpan<byte> source)
     {
         if (Tail + source.Length > _capacity)
             throw new InvalidOperationException("Buffer too small.");
@@ -47,4 +44,3 @@ internal unsafe struct FixedBufferWriter : IBufferWriter<byte>
         Tail += source.Length;
     }
 }
-
