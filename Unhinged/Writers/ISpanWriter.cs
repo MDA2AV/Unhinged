@@ -11,11 +11,3 @@ internal interface ISpanWriter<T>
     /// <returns>A <see cref="T:System.Span`1" /> of at least the size <paramref name="sizeHint" />. If <paramref name="sizeHint" /> is 0, returns a non-empty buffer.</returns>
     Span<T> GetSpan(int sizeHint = 0);
 }
-
-internal unsafe interface IUnmanagedBufferWriter<T> where T : unmanaged
-{
-    void Advance(int count);
-    T* GetPointer();
-    void Write(ReadOnlySpan<byte> source);
-    void WriteUnmanaged(ReadOnlySpan<byte> source);
-}

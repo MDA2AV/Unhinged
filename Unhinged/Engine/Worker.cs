@@ -5,7 +5,7 @@ namespace Unhinged;
 
 // ReSharper disable always SuggestVarOrType_BuiltInTypes
 
-// First draft, will be reworked
+[SkipLocalsInit]
 internal sealed unsafe class Worker : IDisposable
 {
     // Worker index (for logging, load balancing, etc.)

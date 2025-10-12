@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace Unhinged;
 
 /// <summary>
@@ -14,7 +16,7 @@ namespace Unhinged;
 /// heap allocations or GC involvement.
 /// </summary>
 [SkipLocalsInit]
-internal unsafe struct FixedBufferWriter : IUnmanagedBufferWriter<byte>, IDisposable
+internal unsafe class FixedBufferWriter : IUnmanagedBufferWriter<byte>, IBufferWriter<byte>, IDisposable
 {
     // =========================================================================
     //  Fields
@@ -24,6 +26,8 @@ internal unsafe struct FixedBufferWriter : IUnmanagedBufferWriter<byte>, IDispos
     /// The total capacity (in bytes) of the memory region represented by this writer.
     /// </summary>
     private readonly int _capacity;
+    
+    private readonly UnmanagedMemoryManager _manager;
 
     /// <summary>
     /// The current read position (if the buffer is also reused for reads).
@@ -34,7 +38,7 @@ internal unsafe struct FixedBufferWriter : IUnmanagedBufferWriter<byte>, IDispos
     /// <summary>
     /// The current write position. Bytes have been written in [0 .. Tail).
     /// </summary>
-    internal int Tail { get; private set; }
+    internal int Tail;
 
     /// <summary>
     /// Pointer to the beginning of the unmanaged buffer.
@@ -62,6 +66,8 @@ internal unsafe struct FixedBufferWriter : IUnmanagedBufferWriter<byte>, IDispos
         _capacity = capacity;
         Head = 0;
         Tail = 0;
+        
+        _manager = new UnmanagedMemoryManager(ptr, capacity);
     }
 
     // =========================================================================
@@ -88,7 +94,17 @@ internal unsafe struct FixedBufferWriter : IUnmanagedBufferWriter<byte>, IDispos
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Advance(int count)
     {
+        //Volatile.Write(ref Tail, Tail + count);
         Tail += count;
+    }
+
+    public Memory<byte> GetMemory(int sizeHint = 0)
+    {
+        int remaining = _capacity - Tail;
+        if (sizeHint > remaining)
+            throw new InvalidOperationException("Buffer too small.");
+        
+        return _manager.Memory.Slice(Tail, remaining);
     }
 
     /// <summary>
@@ -134,10 +150,8 @@ internal unsafe struct FixedBufferWriter : IUnmanagedBufferWriter<byte>, IDispos
             throw new InvalidOperationException("Buffer too small.");
 
         fixed (byte* src = source)
-        {
             Buffer.MemoryCopy(src, Ptr + Tail, _capacity - Tail, len);
-        }
-
+        
         Tail += len;
     }
 

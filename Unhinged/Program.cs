@@ -1,4 +1,6 @@
-﻿using static Unhinged.Native;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
+using static Unhinged.Native;
 using static Unhinged.HeaderParsing;
 using static Unhinged.ProcessorArchDependant;
 
@@ -12,10 +14,10 @@ namespace Unhinged;
 [SkipLocalsInit] internal static unsafe class Program
 {
     private const int Backlog = 16384; // listen() backlog hint to the kernel
-    private const int MaxNumberConnectionsPerWorker = 512;
+    private const int MaxNumberConnectionsPerWorker = 1024;
     private const int InSlabSize = 16 * 1024;
     private const int OutSlabSize = 16 * 1024;
-    private const int MaxEventsPerWake = 512;
+    private const int MaxEventsPerWake = 16;
     private const int MaxStackSizePerThread = 1024 * 1024;
 
     // ===== Entry point =====
@@ -34,7 +36,7 @@ namespace Unhinged;
         var W = new Worker[workers];
         for (int i = 0; i < workers; i++)
         {
-            W[i] = new Worker(i, MaxEventsPerWake, 64); // MaxEvents per epoll_wait for this worker
+            W[i] = new Worker(i, MaxEventsPerWake, MaxNumberConnectionsPerWorker); // MaxEvents per epoll_wait for this worker
             int iCap = i; // capture loop variable safely
             var t = new Thread(() => WorkerLoop(W[iCap]), MaxStackSizePerThread) // 1MB
             {
@@ -201,12 +203,6 @@ namespace Unhinged;
                         
                         // Adding a new connection to the pool, setting the file descriptor for the client socket 
                         // and the byte* pointing to the stack allocated write buffer segment
-                        //var connectionIndex = W.GetFirstFreeConnectionIndex();
-                        //conns[cfd] = new Connection(MaxNumberConnectionsPerWorker, InSlabSize, OutSlabSize);
-                        /*if (!conns.TryGetValue(cfd, out var conn))
-                        {
-                            conns[cfd] = new Connection(MaxNumberConnectionsPerWorker, InSlabSize, OutSlabSize);
-                        }*/
                         conns[cfd] = ConnectionPool.Get();
                     }
                     continue;
@@ -249,7 +245,7 @@ namespace Unhinged;
                         long got;
                         //fixed (byte* p = &c.Buf[c.Tail])
                         //    got = recv(fd, (IntPtr)p, (ulong)avail, 0);
-                        got = recv(fd, c.RecBuf, (ulong)avail, 0);
+                        got = recv(fd, c.ReceiveBuffer, (ulong)avail, 0);
 
                         if (got > 0)
                         {
@@ -273,8 +269,6 @@ namespace Unhinged;
                         CloseConn(fd, conns, W); break; // default: close on unexpected errors
                     }
                     
-                    // TODO: A potential improvement for high load could be just arm EPOLLOUT for this fd
-                    // TODO: and continue; so that we can handle other fd's..
                     var dataToBeFlushedAvailable = TryParseRequests(c);
                     if (dataToBeFlushedAvailable)
                     {
@@ -289,7 +283,6 @@ namespace Unhinged;
                         {
                             // There is still data to be flushed in the buffer, arm EPOLLOUT
                             ArmEpollOut(ref fd, W.Ep);
-
                             continue;
                         }
                         if (tryEmptyResult == EmptyAttemptResult.CloseConnection)
@@ -345,8 +338,6 @@ namespace Unhinged;
         epoll_ctl(ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
     }
     
-    // Handles requests and commits response to the write buffer, does not attempt to send(flush)
-    // Returns flag signaling if there is data to be flushed in the writing buffer
     private static bool TryParseRequests(Connection connection)
     {
         bool hasDataToFlush = false;
@@ -355,7 +346,7 @@ namespace Unhinged;
         {
             // Try getting a full request header, if unsuccessful signal caller more data is needed
             //int idx = FindCrlfCrlf(connection.Buf, connection.Head, connection.Tail);
-            int idx = FindCrlfCrlf(connection.RecBuf, connection.Head, connection.Tail);
+            int idx = FindCrlfCrlf(connection.ReceiveBuffer, connection.Head, connection.Tail);
             if (idx < 0)
                 break;
             connection.Head = idx + 4; // advance past CRLFCRLF
@@ -371,8 +362,8 @@ namespace Unhinged;
         if (connection.Head > 0 && connection.Head < connection.Tail)
         {
             Buffer.MemoryCopy(
-                connection.RecBuf + connection.Head, 
-                connection.RecBuf, 
+                connection.ReceiveBuffer + connection.Head, 
+                connection.ReceiveBuffer, 
                 InSlabSize, 
                 connection.Tail - connection.Head);
         }
@@ -435,37 +426,22 @@ namespace Unhinged;
         CommitPlainTextResponse(connection);
         //CommitJsonResponse(connection);
     }
-    
+
+    [ThreadStatic] private static Utf8JsonWriter? t_utf8JsonWriter;
+    private static readonly JsonContext SerializerContext = JsonContext.Default;
     private static void CommitJsonResponse(Connection connection)
     {
-        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
                                               "Server: W\r\n"u8 +
                                               "Content-Type: application/json; charset=UTF-8\r\n"u8 +
-                                              "Content-Length: 27\r\n"u8 +
-                                              //"Connection: keep-alive\r\n"u8 +
-                                              "\r\n"u8);
+                                              "Content-Length: 27\r\n"u8);
+        connection.WriteBuffer.Write(DateHelper.HeaderBytes);
+        
+        t_utf8JsonWriter ??= new Utf8JsonWriter(connection.WriteBuffer, new JsonWriterOptions { SkipValidation = true });
+        t_utf8JsonWriter.Reset(connection.WriteBuffer);
         
         var message = new JsonMessage { Message = "Hello, World!" };
-        
-        /*
-        var writer = new SimpleJsonWriter(connection.WriteBuffer);
-        
-        writer.WriteStartObject();
-        writer.WritePropertyName("Message");
-        writer.WriteStringValue("Hello, World!");
-        writer.WriteEndObject();
-        */
-        
-        //var serialized = JsonSerializer.Serialize(message, SerializerContext.JsonMessage);
-        //using var writer = new Utf8JsonWriter(connection.WriteBuffer);
-        //JsonSerializer.Serialize(writer, message, SerializerContext.JsonMessage);
-        //Console.WriteLine($"Writer hash: {connection.WriteBuffer.GetHash}");
-        //Console.WriteLine($"Tail: {Volatile.Read(ref connection.Tail)}");
-        
-        /*using var stream = new UnmanagedMemoryStream(c.WrBuf, 1024, 1024, FileAccess.Write);
-        using var writer = new Utf8JsonWriter(stream);
-        JsonSerializer.Serialize(writer, message);
-        return (int)stream.Position;*/
+        JsonSerializer.Serialize(t_utf8JsonWriter, message, SerializerContext.JsonMessage);
     }
 
     private static void CommitPlainTextResponse(Connection connection)
@@ -473,8 +449,9 @@ namespace Unhinged;
         connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
                                               "Server: W\r\n"u8 +
                                               "Content-Type: text/plain\r\n"u8 +
-                                              "Content-Length: 13\r\n\r\n"u8 +
-                                              "Hello, World!"u8);
+                                              "Content-Length: 13\r\n"u8);
+        connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
+        connection.WriteBuffer.Write("Hello, World!"u8);
     }
     
     // ===== Close helpers =====
