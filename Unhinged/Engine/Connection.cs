@@ -1,3 +1,10 @@
+// ReSharper disable always CheckNamespace
+// ReSharper disable always SuggestVarOrType_BuiltInTypes
+// (var is avoided intentionally in this project so that concrete types are visible at call sites.)
+// ReSharper disable always StackAllocInsideLoop
+// ReSharper disable always ClassCannotBeInstantiated
+#pragma warning disable CA2014
+
 namespace Unhinged;
 
 /// <summary>
@@ -6,22 +13,27 @@ namespace Unhinged;
 /// - <see cref="WriteBuffer"/>: send buffer writer (unmanaged slab)
 /// </summary>
 [SkipLocalsInit]
-internal unsafe class Connection : IDisposable
+public unsafe class Connection : IDisposable
 {
     /// <summary>Read window: bytes are valid in [<see cref="Head"/> ... <see cref="Tail"/>)</summary>
-    internal int Head, Tail;
+    public int Head, Tail;
 
     /// <summary>Base pointer for the receiving slab.</summary>
-    internal readonly byte* ReceiveBuffer;
+    public readonly byte* ReceiveBuffer;
 
     /// <summary>Writer over the send slab.</summary>
-    internal readonly FixedBufferWriter WriteBuffer;
+    public readonly FixedBufferWriter WriteBuffer;
+    
+    // <summary>Fnv1a32 hashed route</summary>
+    internal uint HashedRoute { get; set; }
 
     /// <param name="maxConnections">Used to size the slabs (typically per-worker slab size).</param>
     /// <param name="inSlabSize">Bytes per connection for receive.</param>
     /// <param name="outSlabSize">Bytes per connection for send.</param>
     public Connection(int maxConnections, int inSlabSize, int outSlabSize)
     {
+        //AlignedAlloc(size, 64) ensures your memory starts at an address that’s a multiple of 64,
+        //matching CPU cache-line size, reducing false sharing and improving SIMD/cache performance.
         ReceiveBuffer = (byte*)NativeMemory.AlignedAlloc((nuint)(maxConnections * inSlabSize), 64);
         WriteBuffer = new FixedBufferWriter(
             (byte*)NativeMemory.AlignedAlloc((nuint)(maxConnections * outSlabSize), 64),

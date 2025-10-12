@@ -1,5 +1,9 @@
-using static Unhinged.Native;
-using static Unhinged.ProcessorArchDependant;
+// ReSharper disable always CheckNamespace
+// ReSharper disable always SuggestVarOrType_BuiltInTypes
+// (var is avoided intentionally in this project so that concrete types are visible at call sites.)
+// ReSharper disable always StackAllocInsideLoop
+// ReSharper disable always ClassCannotBeInstantiated
+#pragma warning disable CA2014
 
 namespace Unhinged;
 
@@ -10,48 +14,6 @@ internal sealed unsafe class Worker : IDisposable
 {
     // Worker index (for logging, load balancing, etc.)
     internal readonly int Index;
-
-    /* Dropped this, memory slabs are no longer indexable, using per connection pinned allocation
-     
-    internal readonly int MaxConnections;
-    private readonly ulong[] ConnectionStates;
-    
-    public int GetFirstFreeConnectionIndex()
-    {
-        for (int i = 0; i < ConnectionStates.Length; i++)
-        {
-            ulong bits = ConnectionStates[i];
-            
-            if (bits == ulong.MaxValue) 
-                continue; // there is at least one 0-bit
-            
-            ulong freeMask = ~bits;
-            int bitIndex = BitOperations.TrailingZeroCount(freeMask); // index of first free in this block
-            int index = (i << 6) + bitIndex;
-            
-            if (index >= MaxConnections) 
-                continue;
-            
-            ConnectionStates[i] = bits | (1UL << bitIndex); // MARK USED
-            return index;
-        }
-        return -1; // no free
-    }
-
-    public void Free(int index)
-    {
-        int block = index >> 6;
-        int bit = index & 63;
-        ConnectionStates[block] &= ~(1UL << bit);
-    }
-
-    public bool IsUsed(int index)
-    {
-        int block = index >> 6;
-        int bit = index & 63;
-        return ((ConnectionStates[block] >> bit) & 1UL) != 0;
-    }
-    */
 
     // The epoll file descriptor created by epoll_create1().
     // Each worker has its own epoll instance and waits on it in its own thread.
@@ -85,7 +47,7 @@ internal sealed unsafe class Worker : IDisposable
     /// - allocates an events buffer to read epoll_wait() results,
     /// - and can be notified via its NotifyEfd to adopt new connections.
     /// </summary>
-    internal Worker(int idx, int maxEvents, int maxConnections = 64)
+    internal Worker(int idx, int maxEvents)
     {
         Index = idx;
         MaxEvents = maxEvents;
@@ -124,6 +86,48 @@ internal sealed unsafe class Worker : IDisposable
         // Each call to epoll_wait() will fill up to MaxEvents entries in this buffer.
         EventsBuf = Marshal.AllocHGlobal(EvSize * MaxEvents);
     }
+    
+    /* Dropped this, memory slabs are no longer indexable, using per connection pinned allocation
+
+    internal readonly int MaxConnections;
+    private readonly ulong[] ConnectionStates;
+
+    public int GetFirstFreeConnectionIndex()
+    {
+        for (int i = 0; i < ConnectionStates.Length; i++)
+        {
+            ulong bits = ConnectionStates[i];
+
+            if (bits == ulong.MaxValue)
+                continue; // there is at least one 0-bit
+
+            ulong freeMask = ~bits;
+            int bitIndex = BitOperations.TrailingZeroCount(freeMask); // index of first free in this block
+            int index = (i << 6) + bitIndex;
+
+            if (index >= MaxConnections)
+                continue;
+
+            ConnectionStates[i] = bits | (1UL << bitIndex); // MARK USED
+            return index;
+        }
+        return -1; // no free
+    }
+
+    public void Free(int index)
+    {
+        int block = index >> 6;
+        int bit = index & 63;
+        ConnectionStates[block] &= ~(1UL << bit);
+    }
+
+    public bool IsUsed(int index)
+    {
+        int block = index >> 6;
+        int bit = index & 63;
+        return ((ConnectionStates[block] >> bit) & 1UL) != 0;
+    }
+    */
     
     public void Dispose()
     {
