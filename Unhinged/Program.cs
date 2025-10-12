@@ -1,76 +1,30 @@
-﻿using static Unhinged.Native;
+﻿using System.Text.Json;
+using static Unhinged.Native;
 using static Unhinged.HeaderParsing;
-using static Unhinged.ResponseBuilder;
 using static Unhinged.ProcessorArchDependant;
 
 namespace Unhinged;
 
 // ReSharper disable always SuggestVarOrType_BuiltInTypes
 // (var is avoided intentionally in this project so that concrete types are visible at call sites.)
+// ReSharper disable always StackAllocInsideLoop
+#pragma warning disable CA2014
 
-internal static unsafe class Program
+[SkipLocalsInit] internal static unsafe class Program
 {
-    /*
-     * ================================ OVERVIEW ==================================
-     * This program implements a high‑performance HTTP/1.1 server using Linux epoll
-     * from C# via P/Invoke. The design is split into:
-     *   - A single Acceptor thread:
-     *       * epoll-waits the listening socket for EPOLLIN
-     *       * accept4() new connections in non-blocking mode
-     *       * load-balances accepted sockets to Worker threads using a simple
-     *         "least busy" heuristic
-     *       * wakes the chosen Worker via an eventfd (NotifyEfd)
-     *
-     *   - N Worker threads (N = workers):
-     *       * Each Worker owns its own epoll instance (W.Ep)
-     *       * Maintains a connection map (fd -> Connection)
-     *       * Handles read-ready (EPOLLIN) and write-ready (EPOLLOUT) events
-     *       * Parses HTTP headers by scanning for CRLFCRLF (\r\n\r\n)
-     *       * Sends a prebuilt 200 OK response (pinned in memory to avoid copies)
-     *       * Handles backpressure: if send() would block, arms EPOLLOUT and
-     *         resumes when the socket becomes writable.
-     *
-     * Pinned response buffers:
-     *   Pre-constructed HTTP responses are pinned to avoid GC relocations and to
-     *   enable passing stable pointers directly to send().
-     *
-     * Memory strategy per connection:
-     *   * Each Connection holds a byte[] buffer with head/tail indices.
-     *   * We compact or grow the buffer up to MaxHeader (16 KiB) as needed.
-     *   * Once CRLFCRLF is found, we immediately attempt to write the response.
-     *
-     * Error handling:
-     *   * On errors like EPOLLERR/EPOLLHUP/EPOLLRDHUP or EPIPE/ECONNRESET, we
-     *     close the fd and decrement the Worker load counter.
-     *
-     * Concurrency model:
-     *   * The acceptor serializes acceptance and handoff.
-     *   * Workers run independently; a connection is owned by exactly one Worker.
-     * ==========================================================================
-     */
-
-    // ===== HTTP response buffers (pinned) =====
-    // Build and pin a success response so we can send via raw pointer without extra copies.
-    private static readonly byte[] _response200 = Build200();
-    private static readonly GCHandle _h200 = GCHandle.Alloc(_response200, GCHandleType.Pinned);
-    private static readonly byte* _p200 = (byte*)_h200.AddrOfPinnedObject();
-    private static readonly int _len200 = _response200.Length;
-
-    // Build and pin a 431 response for oversized headers.
-    private static readonly byte[] _response431 = BuildSimpleResponse(431, "Request Header Fields Too Large");
-    private static readonly GCHandle _h431 = GCHandle.Alloc(_response431, GCHandleType.Pinned);
-    private static readonly byte* _p431 = (byte*)_h431.AddrOfPinnedObject();
-    private static readonly int _len431 = _response431.Length;
-
     private const int Backlog = 16384; // listen() backlog hint to the kernel
-    private const int MaxHeader = 16 * 1024; // cap for header buffer growth per connection
+    private const int MaxNumberConnectionsPerWorker = 1024;
+    private const int InSlabSize = 16 * 1024;
+    private const int OutSlabSize = 16 * 1024;
+    private const int MaxEventsPerWake = 16;
+    private const int MaxStackSizePerThread = 1024 * 1024;
 
     // ===== Entry point =====
     public static void Main(string[] args)
     {
         Console.WriteLine($"Arch={RuntimeInformation.ProcessArchitecture}, Packed={(Packed ? 12 : 16)}-byte epoll_event");
 
-        int port = 8080;
+        const int port = 8080;
         // Choose a bounded number of workers (heuristic tuned for moderate -c values like 512)
         int workers = Math.Max(8, Math.Min(Environment.ProcessorCount / 2, 16)); // good start for -c512
         
@@ -81,9 +35,12 @@ internal static unsafe class Program
         var W = new Worker[workers];
         for (int i = 0; i < workers; i++)
         {
-            W[i] = new Worker(i, 512); // MaxEvents per epoll_wait for this worker
+            W[i] = new Worker(i, MaxEventsPerWake, MaxNumberConnectionsPerWorker); // MaxEvents per epoll_wait for this worker
             int iCap = i; // capture loop variable safely
-            var t = new Thread(() => WorkerLoop(W[iCap])) { IsBackground = true, Name = $"worker-{iCap}" };
+            var t = new Thread(() => WorkerLoop(W[iCap]), MaxStackSizePerThread) // 1MB
+            {
+                IsBackground = true, Name = $"worker-{iCap}" 
+            };
             t.Start();
         }
 
@@ -137,14 +94,14 @@ internal static unsafe class Program
         if (epoll_ctl(ep, EPOLL_CTL_ADD, listenFd, (IntPtr)ev) != 0)
             throw new Exception("epoll_ctl ADD listen failed");
 
-        // Buffer to receive epoll events (capacity for 128 events per wait call).
-        // NOTE: 128 is an operational batch size, not an OS limit. Increase if needed.
-        IntPtr eventsBuf = Marshal.AllocHGlobal(EvSize * 128);
+        // Buffer to receive epoll events (capacity for MaxEventsPerWake events per wait call).
+        // NOTE: MaxEventsPerWake is an operational batch size, not an OS limit. Increase if needed.
+        IntPtr eventsBuf = Marshal.AllocHGlobal(EvSize * MaxEventsPerWake);
 
         for (;;)
         {
             // Block until at least one event is available on the listening epoll set.
-            int n = epoll_wait(ep, eventsBuf, 128, -1);
+            int n = epoll_wait(ep, eventsBuf, MaxEventsPerWake, -1);
             if (n < 0) { if (Marshal.GetLastPInvokeError() == EINTR) continue; throw new Exception("epoll_wait acceptor"); }
 
             for (int i = 0; i < n; i++)
@@ -170,7 +127,7 @@ internal static unsafe class Program
                         int w = ChooseLeastBusy(workers);
                         workers[w].Inbox.Enqueue(cfd);            // hand off fd to worker queue
                         Interlocked.Increment(ref workers[w].Current); // bump worker load metric
-                        Console.WriteLine($"Incremented {workers[w].Ep} with cfg {cfd} to {workers[w].Current}");
+                        //Console.WriteLine($"Incremented {workers[w].Ep} with cfg {cfd} to {workers[w].Current}");
 
                         // Wake the worker via eventfd. We write 8 bytes (uint64).
                         ulong inc = 1;
@@ -180,7 +137,7 @@ internal static unsafe class Program
 
                     int err = Marshal.GetLastPInvokeError();
                     if (err == EINTR) continue;                  // retry
-                    if (err == EAGAIN || err == EWOULDBLOCK) break; // no more to accept right now
+                    if (err is EAGAIN or EWOULDBLOCK) break; // no more to accept right now
                     // On transient or unexpected accept error, break to next epoll tick.
                     break;
                 }
@@ -194,19 +151,31 @@ internal static unsafe class Program
         int best = 0; int bestLoad = int.MaxValue;
         for (int i = 0; i < workers.Length; i++)
         {
-            // Volatile: 
             int load = Volatile.Read(ref workers[i].Current);
             if (load < bestLoad) { bestLoad = load; best = i; }
         }
         return best;
+    }
+    
+    private static readonly ObjectPool<Connection> ConnectionPool =
+        new DefaultObjectPool<Connection>(new ConnectionPoolPolicy(), 1024*32);
+
+    private class ConnectionPoolPolicy : PooledObjectPolicy<Connection>
+    {
+        public override Connection Create() => new(MaxNumberConnectionsPerWorker, InSlabSize, OutSlabSize);
+        public override bool Return(Connection context)
+        {
+            // Potentially reset buffers here.
+            return true;
+        }
     }
 
     // ===== Worker loop =====
     private static void WorkerLoop(Worker W)
     {
         // Per-worker connection table
-        var conns = new Dictionary<int, Connection>(capacity: 1024);
-
+        var conns = new Dictionary<int, Connection>(capacity: MaxNumberConnectionsPerWorker);
+        
         for (;;)
         {
             // Wait for I/O events or a wakeup from the acceptor (via NotifyEfd)
@@ -230,7 +199,10 @@ internal static unsafe class Program
                         byte* ev = stackalloc byte[EvSize];
                         WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, cfd);
                         epoll_ctl(W.Ep, EPOLL_CTL_ADD, cfd, (IntPtr)ev);
-                        conns[cfd] = new Connection { Fd = cfd };
+                        
+                        // Adding a new connection to the pool, setting the file descriptor for the client socket 
+                        // and the byte* pointing to the stack allocated write buffer segment
+                        conns[cfd] = ConnectionPool.Get();
                     }
                     continue;
                 }
@@ -245,176 +217,253 @@ internal static unsafe class Program
                 // 3) Read-ready path
                 if ((evs & EPOLLIN) != 0)
                 {
-                    if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd); continue; }
+                    if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd, conns); continue; }
 
                     // Ensure free space at the tail; compact or grow if necessary.
                     // TODO: This logic needs rework, doesn't sense
-                    int avail = c.Buf.Length - c.Tail;
+                    //int avail = c.Buf.Length - c.Tail;
+                    int avail = InSlabSize - c.Tail;
+                    
+                    // If the receiving buffer has no space available, that means that either there are
+                    // a lot of requests to be served, or a huge request is being received and is larger than the array size.
+                    // We cannot resize the buffer for now, it is costly, implement it in the future
                     if (avail == 0)
                     {
-                        if (c.Head > 0) { c.CompactIfNeeded(); avail = c.Buf.Length - c.Tail; }
-                        if (avail == 0)
-                        {
-                            int used = c.Tail - c.Head;
-                            if (used >= MaxHeader)
-                            {
-                                // Headers too large → send 431 and close.
-                                send(fd, (IntPtr)_p431, (ulong)_len431, MSG_NOSIGNAL);
-                                CloseConn(fd, conns, W);
-                                continue;
-                            }
-                            // Grow buffer but never exceed MaxHeader.
-                            Array.Resize(ref c.Buf, Math.Min(Math.Max(c.Buf.Length * 2, c.Buf.Length + 1024), MaxHeader));
-                            avail = c.Buf.Length - c.Tail;
-                            if (avail == 0) continue; // no space even after resize; bail out for now.
-                        }
-                    }
+                        throw new NotImplementedException("No available space in the receiving buffer");
+                        
+                        // Check if there are requests available to be handled
+                        // TODO: Implement this
 
+                        // If not, resize the receiving buffer (very difficult if dealing with stack allocated buffer)
+                    }
+                    
                     // Read as much as possible until EAGAIN or buffer is full.
-                    for (;;)
+                    // Read until EAGAIN (socket drained)
+                    while (true)
                     {
                         long got;
-                        fixed (byte* p = &c.Buf[c.Tail])
-                            got = recv(fd, (IntPtr)p, (ulong)avail, 0);
+                        //fixed (byte* p = &c.Buf[c.Tail])
+                        //    got = recv(fd, (IntPtr)p, (ulong)avail, 0);
+                        got = recv(fd, c.ReceiveBuffer, (ulong)avail, 0);
 
                         if (got > 0)
                         {
                             c.Tail += (int)got;
-                            // Try to parse and respond to any complete requests already buffered.
-                            if (TryServeBufferedRequests(c, fd, W, conns))
-                                break; // Response requires EPOLLOUT; stop reading now.
-
-                            // If there is still room, continue reading in this loop.
-                            avail = c.Buf.Length - c.Tail;
-                            if (avail == 0) break;
+                            continue;
+                            
+                        }
+                        if (got == 0) { CloseConn(fd, conns, W); break; } // peer closed
+                        
+                        int err = Marshal.GetLastPInvokeError();
+                        if (err is EAGAIN or EWOULDBLOCK)
+                        {
+                            // Nothing more to read (drained)
+                            // Try to parse for complete requests
+                            // TODO: Possibility of after handling all requests in buffer, try to read more data in this same loop?
+                            // TODO: That could be an issue because this could give more airtime to a specific fd
+                            // TODO: We want to release the loop to move into another fd's?
+                            break;
+                        } 
+                        if (err is ECONNRESET or ECONNABORTED or EPIPE) { CloseConn(fd, conns, W); break; }
+                        CloseConn(fd, conns, W); break; // default: close on unexpected errors
+                    }
+                    
+                    var dataToBeFlushedAvailable = TryParseRequests(c);
+                    if (dataToBeFlushedAvailable)
+                    {
+                        var tryEmptyResult = TryEmptyWriteBuffer(c, ref fd);
+                        if (tryEmptyResult == EmptyAttemptResult.Complete)
+                        {
+                            // All requests were flushed, stay EPOLLIN
+                            // Move on to the next event
                             continue;
                         }
-                        else if (got == 0) { CloseConn(fd, conns, W); break; } // peer closed
-                        else
+                        if (tryEmptyResult == EmptyAttemptResult.Incomplete)
                         {
-                            int err = Marshal.GetLastPInvokeError();
-                            if (err == EAGAIN || err == EWOULDBLOCK) break; // socket would block
-                            if (err == ECONNRESET || err == ECONNABORTED || err == EPIPE) { CloseConn(fd, conns, W); break; }
-                            CloseConn(fd, conns, W); break; // default: close on unexpected errors
+                            // There is still data to be flushed in the buffer, arm EPOLLOUT
+                            ArmEpollOut(ref fd, W.Ep);
+                            continue;
+                        }
+                        if (tryEmptyResult == EmptyAttemptResult.CloseConnection)
+                        {
+                            CloseConn(fd, conns, W);
+                            continue;
                         }
                     }
+                    
+                    // Move on to the next event...
                     continue;
                 }
 
                 // 4) Write-ready path
                 if ((evs & EPOLLOUT) != 0)
                 {
-                    if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd); continue; }
-                    if (!c.WantWrite)
+                    if (!conns.TryGetValue(fd, out var c)) { CloseQuiet(fd, conns); continue; }
+                    
+                    var tryEmptyResult = TryEmptyWriteBuffer(c, ref fd);
+                    if (tryEmptyResult == EmptyAttemptResult.Complete)
                     {
-                        // No pending write: go back to read mode.
-                        byte* ev = stackalloc byte[EvSize];
-                        WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
-                        epoll_ctl(W.Ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
+                        // All requests were flushed, arm EPOLLIN
+                        // Move on to the next event
+                        ArmEpollIn(ref fd, W.Ep);
                         continue;
                     }
-
-                    // Attempt to flush the remainder of the response.
-                    for (;;)
+                    if (tryEmptyResult == EmptyAttemptResult.Incomplete)
                     {
-                        long nSent = send(fd, (IntPtr)(_p200 + c.RespSent), (ulong)(_len200 - c.RespSent), MSG_NOSIGNAL);
-                        if (nSent > 0)
-                        {
-                            c.RespSent += (int)nSent;
-                            if (c.RespSent == _len200)
-                            {
-                                // Response fully flushed. Switch back to EPOLLIN.
-                                c.WantWrite = false;
-                                c.RespSent = 0;
-
-                                byte* ev = stackalloc byte[EvSize];
-                                WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
-                                epoll_ctl(W.Ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
-
-                                // If there are more pipelined requests in the buffer, serve them.
-                                TryServeBufferedRequests(c, fd, W, conns);
-                                break;
-                            }
-                            continue; // still have bytes to send; loop
-                        }
-                        int err = (nSent == 0) ? EAGAIN : Marshal.GetLastPInvokeError();
-                        if (err == EAGAIN) break; // stay armed for EPOLLOUT
-                        if (err is EPIPE or ECONNRESET) { CloseConn(fd, conns, W); break; }
-                        CloseConn(fd, conns, W); break;
+                        // There is still data to be flushed in the buffer, stay EPOLLOUT
+                        continue;
                     }
-                    continue;
+                    if (tryEmptyResult == EmptyAttemptResult.CloseConnection)
+                    {
+                        CloseConn(fd, conns, W);
+                        continue;
+                    }
                 }
             }
         }
     }
 
-    // ===== HTTP request parse + send (CRLFCRLF) =====
-    private static bool TryServeBufferedRequests(Connection c, int fd, Worker W, Dictionary<int, Connection> conns)
+    private static void ArmEpollIn(ref int fd, int ep)
     {
-        // Process as many complete requests as are already buffered (HTTP pipelining).
-        for (;;)
-        {
-            // Look for the end of headers (\r\n\r\n). Returns index or -1 if not found.
-            int idx = FindCrlfCrlf(c.Buf, c.Head, c.Tail);
-            if (idx < 0) return false; // need more data
-            c.Head = idx + 4;          // advance past CRLFCRLF
-            
-            // Build the response
+        byte* ev = stackalloc byte[EvSize];
+        WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
+        epoll_ctl(ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
+    }
 
-            // Try to send the entire prebuilt 200 OK response immediately.
-            int sent = 0;
-            for (;;)
+    private static void ArmEpollOut(ref int fd, int ep)
+    {
+        byte* ev = stackalloc byte[EvSize];
+        WriteEpollEvent(ev, EPOLLOUT | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
+        epoll_ctl(ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
+    }
+    
+    private static bool TryParseRequests(Connection connection)
+    {
+        bool hasDataToFlush = false;
+        
+        while (true)
+        {
+            // Try getting a full request header, if unsuccessful signal caller more data is needed
+            //int idx = FindCrlfCrlf(connection.Buf, connection.Head, connection.Tail);
+            int idx = FindCrlfCrlf(connection.ReceiveBuffer, connection.Head, connection.Tail);
+            if (idx < 0)
+                break;
+            connection.Head = idx + 4; // advance past CRLFCRLF
+            
+            // A full request was received, handle it!
+            CommitResponse(connection);
+
+            hasDataToFlush = true;
+        }
+        
+        // If there is unprocessed data in the receiving buffer (incomplete request) which is not at buffer start
+        // Move the incomplete request to the buffer start and reset head and tail to 0
+        if (connection.Head > 0 && connection.Head < connection.Tail)
+        {
+            Buffer.MemoryCopy(
+                connection.ReceiveBuffer + connection.Head, 
+                connection.ReceiveBuffer, 
+                InSlabSize, 
+                connection.Tail - connection.Head);
+        }
+        
+        //Reset the receiving buffer
+        connection.Head = connection.Tail = 0;
+        return hasDataToFlush;
+    }
+
+    private enum EmptyAttemptResult { Complete, Incomplete, CloseConnection }
+
+    private static EmptyAttemptResult TryEmptyWriteBuffer(Connection connection, ref int fd)
+    {
+        while (true)
+        {
+            byte* headPointer = connection.WriteBuffer.Ptr + connection.WriteBuffer.Head;
+            long remaining = (long)(connection.WriteBuffer.Tail - connection.WriteBuffer.Head);
+            
+            // TODO: Check if send can return negative values
+            long n = send(fd, headPointer, remaining, MSG_NOSIGNAL);
+
+            if (n > 0)
             {
-                long n = send(fd, (IntPtr)(_p200 + sent), (ulong)(_len200 - sent), MSG_NOSIGNAL);
-                if (n > 0)
+                // Check if all data was sent
+                if (n == remaining)
                 {
-                    sent += (int)n; 
-                    if (sent == _len200) 
-                        break; 
+                    // Remaining data was flushed/sent
                     
-                    continue; 
+                    // Reset Writing buffer, point to the start
+                    connection.WriteBuffer.Reset();
                     
-                }
-                int err = (n == 0) ? EAGAIN : Marshal.GetLastPInvokeError();
-                if (err == EAGAIN)
-                {
-                    // Socket not currently writable → remember offset and arm EPOLLOUT
-                    c.WantWrite = true;
-                    c.RespSent = sent;
-                    byte* ev = stackalloc byte[EvSize];
-                    WriteEpollEvent(ev, EPOLLOUT | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
-                    epoll_ctl(W.Ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
-                    return true; // will resume in the EPOLLOUT path
+                    // If all data was sent, signal caller
+                    return EmptyAttemptResult.Complete;
                 }
                 
-                // On any other error, close and report as handled.
-                CloseConn(fd, conns, W);
-                return true;
+                // At least some data was flushed
+                // Update the Head
+                connection.WriteBuffer.Head += (int)n;
+                
+                // Some data was flushed but not all, try again (possibly until EAGAIN)
+                continue;
             }
-
-            // If we reach here, the response was fully sent synchronously.
-            // Reset/compact the buffer for potential additional pipelined requests.
-            if (c.Head >= c.Tail) { c.Head = c.Tail = 0; return false; }
-            if (c.Head > 0) c.CompactIfNeeded();
-            // Loop to handle any next pipelined request already in the buffer.
+            
+            // Wasn't able to flush, why?
+            int err = (n == 0) ? EAGAIN : Marshal.GetLastPInvokeError();
+            if (err == EAGAIN)
+            {
+                // Notify the caller that we must keep trying to flush the data (arm EPOLLOUT)
+                return EmptyAttemptResult.Incomplete;
+            }
+            
+            // Other error, signal caller to close the connection
+            return EmptyAttemptResult.CloseConnection;
         }
     }
 
-    private static void CreateResponse()
+    private static void CommitResponse(Connection connection)
     {
-        
+        //TODO: Parse route
+        CommitPlainTextResponse(connection);
+        //CommitJsonResponse(connection);
     }
 
+    [ThreadStatic] private static Utf8JsonWriter? t_utf8JsonWriter;
+    private static readonly JsonContext SerializerContext = JsonContext.Default;
+    private static void CommitJsonResponse(Connection connection)
+    {
+        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: application/json; charset=UTF-8\r\n"u8 +
+                                              "Content-Length: 27\r\n"u8);
+        connection.WriteBuffer.Write(DateHelper.HeaderBytes);
+        
+        t_utf8JsonWriter ??= new Utf8JsonWriter(connection.WriteBuffer, new JsonWriterOptions { SkipValidation = true });
+        t_utf8JsonWriter.Reset(connection.WriteBuffer);
+        
+        var message = new JsonMessage { Message = "Hello, World!" };
+        JsonSerializer.Serialize(t_utf8JsonWriter, message, SerializerContext.JsonMessage);
+    }
+
+    private static void CommitPlainTextResponse(Connection connection)
+    {
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: text/plain\r\n"u8 +
+                                              "Content-Length: 13\r\n"u8);
+        connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
+        connection.WriteBuffer.Write("Hello, World!"u8);
+    }
+    
     // ===== Close helpers =====
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void CloseConn(int fd, Dictionary<int, Connection> map, Worker W)
     {
         // Remove from map, close fd, and decrement the worker's load counter.
+        ConnectionPool.Return(map[fd]);
         map.Remove(fd);
-        CloseQuiet(fd);
+        CloseQuiet(fd, map);
         Interlocked.Decrement(ref W.Current);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void CloseQuiet(int fd) { try { close(fd); } catch { } }
+    private static void CloseQuiet(int fd, Dictionary<int, Connection> map) { try { close(fd); } catch { } }
 }
