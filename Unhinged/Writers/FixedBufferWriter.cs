@@ -1,3 +1,10 @@
+// ReSharper disable always CheckNamespace
+// ReSharper disable always SuggestVarOrType_BuiltInTypes
+// (var is avoided intentionally in this project so that concrete types are visible at call sites.)
+// ReSharper disable always StackAllocInsideLoop
+// ReSharper disable always ClassCannotBeInstantiated
+#pragma warning disable CA2014
+
 using System.Buffers;
 
 namespace Unhinged;
@@ -16,7 +23,7 @@ namespace Unhinged;
 /// heap allocations or GC involvement.
 /// </summary>
 [SkipLocalsInit]
-internal unsafe class FixedBufferWriter : IUnmanagedBufferWriter<byte>, IBufferWriter<byte>, IDisposable
+public unsafe class FixedBufferWriter : IUnmanagedBufferWriter<byte>, IBufferWriter<byte>, IDisposable
 {
     // =========================================================================
     //  Fields
@@ -33,17 +40,17 @@ internal unsafe class FixedBufferWriter : IUnmanagedBufferWriter<byte>, IBufferW
     /// The current read position (if the buffer is also reused for reads).
     /// Not used by the writer itself, but exposed for external control.
     /// </summary>
-    internal int Head;
+    public int Head;
 
     /// <summary>
     /// The current write position. Bytes have been written in [0 .. Tail).
     /// </summary>
-    internal int Tail;
+    public int Tail;
 
     /// <summary>
     /// Pointer to the beginning of the unmanaged buffer.
     /// </summary>
-    internal byte* Ptr { get; }
+    public byte* Ptr { get; }
 
     // =========================================================================
     //  Constructor
@@ -81,7 +88,7 @@ internal unsafe class FixedBufferWriter : IUnmanagedBufferWriter<byte>, IBufferW
     /// Does not modify the underlying memory — only the pointers.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void Reset()
+    public void Reset()
     {
         Head = 0;
         Tail = 0;

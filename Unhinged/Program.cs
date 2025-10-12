@@ -1,7 +1,4 @@
 ﻿using System.Text.Json;
-using static Unhinged.Native;
-using static Unhinged.HeaderParsing;
-using static Unhinged.ProcessorArchDependant;
 
 namespace Unhinged;
 
@@ -10,7 +7,49 @@ namespace Unhinged;
 // ReSharper disable always StackAllocInsideLoop
 #pragma warning disable CA2014
 
-[SkipLocalsInit] internal static unsafe class Program
+internal class Program
+{
+    public static void Main(string[] args)
+    {
+        var builder = UnhingedEngine.CreateBuilder();
+        
+        var engine = builder.Build();
+        
+        engine.Run();
+    }
+    
+    [ThreadStatic] private static Utf8JsonWriter? t_utf8JsonWriter;
+    private static readonly JsonContext SerializerContext = JsonContext.Default;
+    private static void CommitJsonResponse(Connection connection)
+    {
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: application/json; charset=UTF-8\r\n"u8 +
+                                              "Content-Length: 27\r\n"u8);
+        connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
+        
+        t_utf8JsonWriter ??= new Utf8JsonWriter(connection.WriteBuffer, new JsonWriterOptions { SkipValidation = true });
+        t_utf8JsonWriter.Reset(connection.WriteBuffer);
+        
+        // Creating(Allocating) a new JsonMessage every request
+        var message = new JsonMessage { Message = "Hello, World!" };
+        // Serializing it every request
+        JsonSerializer.Serialize(t_utf8JsonWriter, message, SerializerContext.JsonMessage);
+    }
+
+    private static void CommitPlainTextResponse(Connection connection)
+    {
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: text/plain\r\n"u8 +
+                                              "Content-Length: 13\r\n"u8);
+        connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
+        connection.WriteBuffer.Write("Hello, World!"u8);
+    }
+}
+
+/*
+[SkipLocalsInit] internal static unsafe class Program1
 {
     private const int Backlog = 16384; // listen() backlog hint to the kernel
     private const int MaxNumberConnectionsPerWorker = 1024;
@@ -467,3 +506,4 @@ namespace Unhinged;
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void CloseQuiet(int fd, Dictionary<int, Connection> map) { try { close(fd); } catch { } }
 }
+*/
