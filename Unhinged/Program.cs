@@ -7,26 +7,44 @@ namespace Unhinged;
 // ReSharper disable always StackAllocInsideLoop
 #pragma warning disable CA2014
 
-internal class Program
+[SkipLocalsInit]
+internal static class Program
 {
     public static void Main(string[] args)
     {
-        var builder = UnhingedEngine.CreateBuilder();
+        var builder = UnhingedEngine
+            .CreateBuilder()
+            .SetNWorkersSolver(() => Environment.ProcessorCount / 2)
+            .SetBacklog(16384)
+            .SetMaxEventsPerWake(128)
+            .SetMaxNumberConnectionsPerWorker(32)
+            .SetPort(8080)
+            .SetSlabSizes(16 * 1024, 16 * 1024)
+            .InjectRequestHandler(RequestHandler);
         
         var engine = builder.Build();
         
         engine.Run();
+    }
+
+    private static void RequestHandler(Connection connection)
+    {
+       if(connection.HashedRoute == 291830056)          // /json
+           CommitJsonResponse(connection);
+       
+       else if (connection.HashedRoute == 3454831873)   // /plaintext
+           CommitPlainTextResponse(connection);
     }
     
     [ThreadStatic] private static Utf8JsonWriter? t_utf8JsonWriter;
     private static readonly JsonContext SerializerContext = JsonContext.Default;
     private static void CommitJsonResponse(Connection connection)
     {
-        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
-                                              "Server: W\r\n"u8 +
-                                              "Content-Type: application/json; charset=UTF-8\r\n"u8 +
-                                              "Content-Length: 27\r\n"u8);
-        connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
+        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
+                                     "Server: W\r\n"u8 +
+                                     "Content-Type: application/json; charset=UTF-8\r\n"u8 +
+                                     "Content-Length: 27\r\n"u8);
+        connection.WriteBuffer.Write(DateHelper.HeaderBytes);
         
         t_utf8JsonWriter ??= new Utf8JsonWriter(connection.WriteBuffer, new JsonWriterOptions { SkipValidation = true });
         t_utf8JsonWriter.Reset(connection.WriteBuffer);
@@ -39,17 +57,19 @@ internal class Program
 
     private static void CommitPlainTextResponse(Connection connection)
     {
-        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
-                                              "Server: W\r\n"u8 +
-                                              "Content-Type: text/plain\r\n"u8 +
-                                              "Content-Length: 13\r\n"u8);
-        connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
+        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
+                                     "Server: W\r\n"u8 +
+                                     "Content-Type: text/plain\r\n"u8 +
+                                     "Content-Length: 13\r\n\r\n"u8);
+                                              //"Content-Length: 13\r\n"u8);
+        //connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
         connection.WriteBuffer.Write("Hello, World!"u8);
     }
 }
 
+
 /*
-[SkipLocalsInit] internal static unsafe class Program1
+[SkipLocalsInit] internal static unsafe class Program
 {
     private const int Backlog = 16384; // listen() backlog hint to the kernel
     private const int MaxNumberConnectionsPerWorker = 1024;
@@ -74,7 +94,7 @@ internal class Program
         var W = new Worker[workers];
         for (int i = 0; i < workers; i++)
         {
-            W[i] = new Worker(i, MaxEventsPerWake, MaxNumberConnectionsPerWorker); // MaxEvents per epoll_wait for this worker
+            W[i] = new Worker(i, MaxEventsPerWake); // MaxEvents per epoll_wait for this worker
             int iCap = i; // capture loop variable safely
             var t = new Thread(() => WorkerLoop(W[iCap]), MaxStackSizePerThread) // 1MB
             {

@@ -23,6 +23,9 @@ public unsafe class Connection : IDisposable
 
     /// <summary>Writer over the send slab.</summary>
     public readonly FixedBufferWriter WriteBuffer;
+    
+    // <summary>Fnv1a32 hashed route</summary>
+    internal uint HashedRoute { get; set; }
 
     /// <param name="maxConnections">Used to size the slabs (typically per-worker slab size).</param>
     /// <param name="inSlabSize">Bytes per connection for receive.</param>
@@ -36,8 +39,6 @@ public unsafe class Connection : IDisposable
             (byte*)NativeMemory.AlignedAlloc((nuint)(maxConnections * outSlabSize), 64),
             outSlabSize);
     }
-
-    public int Route { get; set; }
 
     /// <summary>
     /// Frees the unmanaged slabs. Call exactly once when the connection is permanently done.

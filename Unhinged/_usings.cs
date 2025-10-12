@@ -11,3 +11,4 @@ global using Microsoft.Extensions.ObjectPool;
 global using static Unhinged.ProcessorArchDependant;
 global using static Unhinged.Native;
 global using static Unhinged.HeaderParsing;
+global using static Unhinged.HashUtils;
