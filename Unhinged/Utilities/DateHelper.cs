@@ -2,6 +2,9 @@ using System.Buffers.Text;
 
 namespace Unhinged;
 
+// Stolen from asp net core platform benchmark :D
+// TODO: Try a different approach
+
 /// <summary>
 /// Manages the generation of the date header value.
 /// </summary>
@@ -38,11 +41,7 @@ public static class DateHelper
         SyncDateTimer();
     }
 
-    private static void SyncDateTimer()
-    {
-        STimer.Change(1000, 1000);
-    }
-
+    private static void SyncDateTimer() => STimer.Change(1000, 1000);
     public static ReadOnlySpan<byte> HeaderBytes => _sHeaderBytesMaster;
 
     private static void SetDateValues(DateTimeOffset value)
@@ -50,9 +49,8 @@ public static class DateHelper
         lock (_sHeaderBytesScratch)
         {
             if (!Utf8Formatter.TryFormat(value, _sHeaderBytesScratch.AsSpan(PrefixLength), out var written, 'R'))
-            {
                 throw new Exception("date time format failed");
-            }
+            
             //Debug.Assert(written == dateTimeRLength);
             (_sHeaderBytesScratch, _sHeaderBytesMaster) = (_sHeaderBytesMaster, _sHeaderBytesScratch);
         }

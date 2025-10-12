@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Serialization;
 using static Unhinged.Native;
 using static Unhinged.HeaderParsing;
 using static Unhinged.ProcessorArchDependant;
