@@ -25,7 +25,7 @@ public unsafe class Connection : IDisposable
     public readonly FixedBufferWriter WriteBuffer;
     
     // <summary>Fnv1a32 hashed route</summary>
-    internal uint HashedRoute { get; set; }
+    public uint HashedRoute { get; set; }
 
     /// <param name="maxConnections">Used to size the slabs (typically per-worker slab size).</param>
     /// <param name="inSlabSize">Bytes per connection for receive.</param>

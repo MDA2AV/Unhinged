@@ -1,26 +1,28 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <OutputType>Exe</OutputType>
         <TargetFramework>net9.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-        <IsTestAssetProject>true</IsTestAssetProject>
-        <ServerGarbageCollection>true</ServerGarbageCollection>
-        <TieredPGO>true</TieredPGO>
 
-        <!-- Required for self-contained publish -->
-        <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
-        <SelfContained>true</SelfContained>
+        <Title>Unhinged</Title>
+        <Authors>Diogo Martins</Authors>
+        <RepositoryUrl>https://github.com/MDA2AV/Unhinged</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <AssemblyVersion>9.0.0</AssemblyVersion>
+        <FileVersion>9.0.0</FileVersion>
+        <Version>9.0.0</Version>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageTags>Unhinged</PackageTags>
+        <PackageLicenseFile>LICENSE</PackageLicenseFile>
+        <Description>https://github.com/MDA2AV/Unhinged</Description>
+        <PackageProjectUrl>https://github.com/MDA2AV/Unhinged</PackageProjectUrl>
+        
     </PropertyGroup>
 
-    <ItemGroup Condition="$(PublishAot) == 'true'">
-        <RuntimeHostConfigurationOption Include="System.Threading.ThreadPool.HillClimbing.Disable" Value="true" />
-    </ItemGroup>
-
     <ItemGroup>
-      <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="10.0.0-rc.1.25451.107" />
+        <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="10.0.0-rc.1.25451.107" />
     </ItemGroup>
 
 </Project>

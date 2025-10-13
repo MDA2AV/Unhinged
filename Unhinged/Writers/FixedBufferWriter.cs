@@ -5,8 +5,6 @@
 // ReSharper disable always ClassCannotBeInstantiated
 #pragma warning disable CA2014
 
-using System.Buffers;
-
 namespace Unhinged;
 
 /// <summary>

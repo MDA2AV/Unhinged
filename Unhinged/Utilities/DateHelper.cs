@@ -3,6 +3,7 @@
 // (var is avoided intentionally in this project so that concrete types are visible at call sites.)
 // ReSharper disable always StackAllocInsideLoop
 // ReSharper disable always ClassCannotBeInstantiated
+
 #pragma warning disable CA2014
 
 namespace Unhinged;
