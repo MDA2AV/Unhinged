@@ -1,6 +1,8 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unhinged", "Unhinged\Unhinged.csproj", "{01D62FEF-383D-4446-846B-7503D217B1D7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unhinged", "Unhinged\Unhinged.csproj", "{4DA83CE5-5152-4142-BD80-EBCCED4694CF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unhinged.Playground", "Unhinged.Playground\Unhinged.Playground.csproj", "{5D135CA9-4854-458E-A48C-287CF1A0DEC2}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -8,9 +10,13 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{01D62FEF-383D-4446-846B-7503D217B1D7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{01D62FEF-383D-4446-846B-7503D217B1D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{01D62FEF-383D-4446-846B-7503D217B1D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{01D62FEF-383D-4446-846B-7503D217B1D7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4DA83CE5-5152-4142-BD80-EBCCED4694CF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4DA83CE5-5152-4142-BD80-EBCCED4694CF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4DA83CE5-5152-4142-BD80-EBCCED4694CF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4DA83CE5-5152-4142-BD80-EBCCED4694CF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5D135CA9-4854-458E-A48C-287CF1A0DEC2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5D135CA9-4854-458E-A48C-287CF1A0DEC2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D135CA9-4854-458E-A48C-287CF1A0DEC2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5D135CA9-4854-458E-A48C-287CF1A0DEC2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
