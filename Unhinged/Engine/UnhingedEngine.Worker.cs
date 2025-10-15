@@ -3,6 +3,7 @@
 // (var is avoided intentionally in this project so that concrete types are visible at call sites.)
 // ReSharper disable always StackAllocInsideLoop
 // ReSharper disable always ClassCannotBeInstantiated
+
 #pragma warning disable CA2014
 
 namespace Unhinged;
@@ -65,7 +66,7 @@ public sealed unsafe partial class UnhingedEngine
             // Wait for I/O events or a wakeup from the acceptor (via NotifyEfd)
             int n = epoll_wait(W.Ep, W.EventsBuf, W.MaxEvents, -1);
             if (n < 0) { if (Marshal.GetLastPInvokeError() == EINTR) continue; throw new Exception("epoll_wait worker"); }
-
+            
             for (int i = 0; i < n; i++)
             {
                 ReadEpollEvent((byte*)W.EventsBuf + i * EvSize, out uint evs, out int fd);
@@ -349,7 +350,7 @@ public sealed unsafe partial class UnhingedEngine
         ConnectionPool.Return(map[fd]);
         map.Remove(fd);
 
-        Console.WriteLine($"Closing {fd}");
+        //Console.WriteLine($"Closing {fd}");
         
         CloseQuiet(fd);
         Interlocked.Decrement(ref W.Current);

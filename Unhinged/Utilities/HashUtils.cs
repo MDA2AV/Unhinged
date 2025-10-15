@@ -51,4 +51,43 @@ internal static class HashUtils
 
         return h;
     }
+    
+    /// <summary>
+    /// Computes an 8-bit FNV-1a hash of the given byte span.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the 32-bit version but truncated to 8 bits (mod 256).  
+    /// This variant is extremely small and fast — ideal for quick indexing or hashing
+    /// into small tables, but collisions are frequent due to the 1-byte range.
+    ///
+    /// Formula:
+    /// <code>
+    /// h = 0xA3
+    /// for each byte b in data:
+    ///     h = (h XOR b) * 0x9B
+    /// return h
+    /// </code>
+    ///
+    /// Characteristics:
+    ///  • Output range: 0–255  
+    ///  • Very lightweight; no heap allocations  
+    ///  • Not stable for large datasets (collisions expected)
+    /// </remarks>
+    /// <param name="data">Input data to hash.</param>
+    /// <returns>8-bit FNV-1a hash value.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static byte Fnv1a8(ReadOnlySpan<byte> data)
+    {
+        const byte offset = 0xA3; // 163 decimal
+        const byte prime = 0x9B;  // 155 decimal
+        byte h = offset;
+
+        for (int i = 0; i < data.Length; i++)
+        {
+            h ^= data[i];
+            unchecked { h = (byte)(h * prime); }
+        }
+
+        return h;
+    }
 }

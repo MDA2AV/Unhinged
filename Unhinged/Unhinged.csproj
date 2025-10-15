@@ -10,9 +10,9 @@
         <Authors>Diogo Martins</Authors>
         <RepositoryUrl>https://github.com/MDA2AV/Unhinged</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
-        <AssemblyVersion>9.0.0</AssemblyVersion>
-        <FileVersion>9.0.0</FileVersion>
-        <Version>9.0.0</Version>
+        <AssemblyVersion>9.0.1</AssemblyVersion>
+        <FileVersion>9.0.1</FileVersion>
+        <Version>9.0.1</Version>
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <PackageTags>Unhinged</PackageTags>
         <PackageLicenseFile>LICENSE</PackageLicenseFile>

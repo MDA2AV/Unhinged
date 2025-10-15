@@ -143,6 +143,8 @@ internal static unsafe class Native
     /// Returns fd (&gt;=0) or -1 on error.
     /// </summary>
     [DllImport("libc", SetLastError = true)] internal static extern int eventfd(uint initval, int flags);
+    
+    [DllImport("libc", SetLastError = true)] internal static extern int sched_setaffinity(int pid, nuint cpusetsize, ref ulong mask);
 
 
     // =========================

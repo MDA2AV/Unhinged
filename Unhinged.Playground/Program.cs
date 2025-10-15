@@ -17,8 +17,8 @@ internal static class Program
             .CreateBuilder()
             .SetNWorkersSolver(() => Environment.ProcessorCount / 2)
             .SetBacklog(16384)
-            .SetMaxEventsPerWake(128)
-            .SetMaxNumberConnectionsPerWorker(32)
+            .SetMaxEventsPerWake(512)
+            .SetMaxNumberConnectionsPerWorker(512)
             .SetPort(8080)
             .SetSlabSizes(16 * 1024, 16 * 1024)
             .InjectRequestHandler(RequestHandler);

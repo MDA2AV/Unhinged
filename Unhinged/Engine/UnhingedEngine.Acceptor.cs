@@ -88,7 +88,7 @@ public sealed unsafe partial class UnhingedEngine
                         workers[w].Inbox.Enqueue(cfd);            // hand off fd to worker queue
                         Interlocked.Increment(ref workers[w].Current); // bump worker load metric
                         
-                        Console.WriteLine($"Incremented {workers[w].Ep} with cfg {cfd} to {workers[w].Current}");
+                        //Console.WriteLine($"Incremented {workers[w].Ep} with cfg {cfd} to {workers[w].Current}");
 
                         // Wake the worker via eventfd. We write 8 bytes (uint64).
                         ulong inc = 1;
