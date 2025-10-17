@@ -37,34 +37,34 @@ internal static class Program
            CommitPlainTextResponse(connection);
     }
     
-    [ThreadStatic] private static Utf8JsonWriter? t_utf8JsonWriter;
+    [ThreadStatic] private static Utf8JsonWriter? _tUtf8JsonWriter;
     private static readonly JsonContext SerializerContext = JsonContext.Default;
     private static void CommitJsonResponse(Connection connection)
     {
-        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
-                                     "Server: W\r\n"u8 +
-                                     "Content-Type: application/json; charset=UTF-8\r\n"u8 +
-                                     "Content-Length: 27\r\n"u8);
-        connection.WriteBuffer.Write(DateHelper.HeaderBytes);
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: application/json; charset=UTF-8\r\n"u8 +
+                                              "Content-Length: 27\r\n"u8);
+        connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
         
-        t_utf8JsonWriter ??= new Utf8JsonWriter(connection.WriteBuffer, new JsonWriterOptions { SkipValidation = true });
-        t_utf8JsonWriter.Reset(connection.WriteBuffer);
+        _tUtf8JsonWriter ??= new Utf8JsonWriter(connection.WriteBuffer, new JsonWriterOptions { SkipValidation = true });
+        _tUtf8JsonWriter.Reset(connection.WriteBuffer);
         
         // Creating(Allocating) a new JsonMessage every request
         var message = new JsonMessage { Message = "Hello, World!" };
         // Serializing it every request
-        JsonSerializer.Serialize(t_utf8JsonWriter, message, SerializerContext.JsonMessage);
+        JsonSerializer.Serialize(_tUtf8JsonWriter, message, SerializerContext.JsonMessage);
     }
 
     private static void CommitPlainTextResponse(Connection connection)
     {
-        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
                                      "Server: W\r\n"u8 +
                                      "Content-Type: text/plain\r\n"u8 +
                                      //"Content-Length: 13\r\n\r\nHello, World!"u8);
                                      "Content-Length: 13\r\n"u8);
         connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
-        connection.WriteBuffer.Write("Hello, World!"u8);
+        connection.WriteBuffer.WriteUnmanaged("Hello, World!"u8);
     }
 }
 
