@@ -3,6 +3,9 @@
 // (var is avoided intentionally in this project so that concrete types are visible at call sites.)
 // ReSharper disable always StackAllocInsideLoop
 // ReSharper disable always ClassCannotBeInstantiated
+
+using System.Text;
+
 #pragma warning disable CA2014
 
 namespace Unhinged;
@@ -60,6 +63,9 @@ internal static unsafe class HeaderParsing
         // Construct a Span<byte> view over the raw memory.
         // The caller must guarantee that (tail - head) bytes are valid and readable.
         var span = new ReadOnlySpan<byte>(buf + head, tail - head);
+
+        //Console.WriteLine($"Spitting buffer: {head}  {tail}  {tail-head}");
+        //Console.WriteLine(Encoding.UTF8.GetString(span));
 
         idx = span.IndexOf(CrlfCrlf);
         if (idx >= 0)

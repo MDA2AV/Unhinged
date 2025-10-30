@@ -4,6 +4,8 @@
 // ReSharper disable always StackAllocInsideLoop
 // ReSharper disable always ClassCannotBeInstantiated
 
+using System.Text;
+
 #pragma warning disable CA2014
 
 namespace Unhinged;
@@ -129,13 +131,12 @@ public sealed unsafe partial class UnhingedEngine
                         long got;
                         //fixed (byte* p = &c.Buf[c.Tail])
                         //    got = recv(fd, (IntPtr)p, (ulong)avail, 0);
-                        got = recv(fd, c.ReceiveBuffer, (ulong)avail, 0);
+                        got = recv(fd, c.ReceiveBuffer + c.Tail, (ulong)avail, 0);
 
                         if (got > 0)
                         {
                             c.Tail += (int)got;
                             continue;
-                            
                         }
                         if (got == 0) { CloseConn(fd, connections, W); break; } // peer closed
                         
@@ -226,6 +227,7 @@ public sealed unsafe partial class UnhingedEngine
             //int idx = FindCrlfCrlf(connection.Buf, connection.Head, connection.Tail);
             //int idx = FindCrlfCrlf(connection.ReceiveBuffer, connection.Head, connection.Tail);
             var headerSpan = FindCrlfCrlf(connection.ReceiveBuffer, connection.Head, connection.Tail, out int idx);
+            
             if (idx < 0)
                 break;
             
@@ -240,12 +242,16 @@ public sealed unsafe partial class UnhingedEngine
             
             // Mark that there is data to flush (a request was fully processed)
             hasDataToFlush = true;
+            
+            if (connection.Head == connection.Tail)
+                break;
         }
         
         // If there is unprocessed data in the receiving buffer (incomplete request) which is not at buffer start
         // Move the incomplete request to the buffer start and reset head and tail to 0
         if (connection.Head > 0 && connection.Head < connection.Tail)
         {
+            Console.WriteLine("= Unprocessed data =");
             Buffer.MemoryCopy(
                 connection.ReceiveBuffer + connection.Head, 
                 connection.ReceiveBuffer, 
@@ -347,13 +353,20 @@ public sealed unsafe partial class UnhingedEngine
     {
         // Remove from map, close fd, and decrement the worker's load counter.
         // TODO: Defensive check if entry exists in the map before trying to remove it?
-        ConnectionPool.Return(map[fd]);
-        map.Remove(fd);
+        try
+        {
+            ConnectionPool.Return(map[fd]);
+            map.Remove(fd);
 
-        //Console.WriteLine($"Closing {fd}");
-        
-        CloseQuiet(fd);
-        Interlocked.Decrement(ref W.Current);
+            //Console.WriteLine($"Closing {fd}");
+
+            CloseQuiet(fd);
+            Interlocked.Decrement(ref W.Current);
+        }
+        catch
+        {
+            // TODO: Complete this.
+        }
     }
 
     /// <summary>

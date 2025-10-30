@@ -41,11 +41,11 @@ internal static class Program
     private static readonly JsonContext SerializerContext = JsonContext.Default;
     private static void CommitJsonResponse(Connection connection)
     {
-        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
-                                     "Server: W\r\n"u8 +
-                                     "Content-Type: application/json; charset=UTF-8\r\n"u8 +
-                                     "Content-Length: 27\r\n"u8);
-        connection.WriteBuffer.Write(DateHelper.HeaderBytes);
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: application/json; charset=UTF-8\r\n"u8 +
+                                              "Content-Length: 27\r\n"u8);
+        connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
         
         t_utf8JsonWriter ??= new Utf8JsonWriter(connection.WriteBuffer, new JsonWriterOptions { SkipValidation = true });
         t_utf8JsonWriter.Reset(connection.WriteBuffer);
@@ -58,13 +58,13 @@ internal static class Program
 
     private static void CommitPlainTextResponse(Connection connection)
     {
-        connection.WriteBuffer.Write("HTTP/1.1 200 OK\r\n"u8 +
-                                     "Server: W\r\n"u8 +
-                                     "Content-Type: text/plain\r\n"u8 +
-                                     //"Content-Length: 13\r\n\r\nHello, World!"u8);
-                                     "Content-Length: 13\r\n"u8);
+        connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
+                                              "Server: W\r\n"u8 +
+                                              "Content-Type: text/plain\r\n"u8 +
+                                              //"Content-Length: 13\r\n\r\nHello, World!"u8);
+                                              "Content-Length: 13\r\n"u8);
         connection.WriteBuffer.WriteUnmanaged(DateHelper.HeaderBytes);
-        connection.WriteBuffer.Write("Hello, World!"u8);
+        connection.WriteBuffer.WriteUnmanaged("Hello, World!"u8);
     }
 }
 
