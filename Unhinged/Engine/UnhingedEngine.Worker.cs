@@ -129,7 +129,7 @@ public sealed unsafe partial class UnhingedEngine
                         long got;
                         //fixed (byte* p = &c.Buf[c.Tail])
                         //    got = recv(fd, (IntPtr)p, (ulong)avail, 0);
-                        got = recv(fd, c.ReceiveBuffer, (ulong)avail, 0);
+                        got = recv(fd, c.ReceiveBuffer + c.Tail, (ulong)avail, 0);
 
                         if (got > 0)
                         {
@@ -240,6 +240,9 @@ public sealed unsafe partial class UnhingedEngine
             
             // Mark that there is data to flush (a request was fully processed)
             hasDataToFlush = true;
+
+            if (connection.Head == connection.Tail) // No more data to read
+                break;
         }
         
         // If there is unprocessed data in the receiving buffer (incomplete request) which is not at buffer start
