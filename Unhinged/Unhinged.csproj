@@ -36,4 +36,8 @@
         <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="10.0.0-rc.1.25451.107" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="__InternalBenchmarkings\" />
+    </ItemGroup>
+
 </Project>

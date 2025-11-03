@@ -3,6 +3,9 @@
 // (var is avoided intentionally in this project so that concrete types are visible at call sites.)
 // ReSharper disable always StackAllocInsideLoop
 // ReSharper disable always ClassCannotBeInstantiated
+
+using System.Text;
+
 #pragma warning disable CA2014
 
 namespace Unhinged;
@@ -158,6 +161,13 @@ public unsafe class FixedBufferWriter : IUnmanagedBufferWriter<byte>, IBufferWri
             Buffer.MemoryCopy(src, Ptr + Tail, _capacity - Tail, len);
         
         Tail += len;
+    }
+
+    public void WriteUnmanaged(string source)
+    {
+        var span = new Span<byte>(Ptr + Tail, _capacity - Tail);
+        var bytesWritten = Encoding.UTF8.GetBytes(source, span);
+        Tail += bytesWritten;
     }
 
     /// <summary>
