@@ -3,6 +3,9 @@
 // (var is avoided intentionally in this project so that concrete types are visible at call sites.)
 // ReSharper disable always StackAllocInsideLoop
 // ReSharper disable always ClassCannotBeInstantiated
+
+using System.Text;
+
 #pragma warning disable CA2014
 
 namespace Unhinged;
@@ -55,7 +58,7 @@ internal static unsafe class HeaderParsing
     /// </param>
     /// <returns>A span over the provided range [head..tail).</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static ReadOnlySpan<byte> FindCrlfCrlf(byte* buf, int head, int tail, out int idx)
+    internal static ReadOnlySpan<byte> FindCrlfCrlf(byte* buf, int head, int tail, ref int idx)
     {
         // Construct a Span<byte> view over the raw memory.
         // The caller must guarantee that (tail - head) bytes are valid and readable.
@@ -105,6 +108,150 @@ internal static unsafe class HeaderParsing
         var url = firstHeader[(firstSpace + 1)..secondSpace];
 
         return Fnv1a32(url);
+    }
+    
+    internal static BinaryH1HeaderData ExtractBinaryH1HeaderData(ReadOnlySpan<byte> headerSpan)
+    {
+        var headerData = new BinaryH1HeaderData();
+        
+        var lineEnd = headerSpan.IndexOf(Crlf);
+        var firstHeader = headerSpan[..lineEnd];
+
+        var firstSpace = firstHeader.IndexOf(Space);
+        if (firstSpace == -1)
+            throw new InvalidOperationException("Invalid request line");
+        
+        headerData.HttpMethod = new PinnedByteSequence(firstHeader[..firstSpace]);
+        
+        var secondSpaceRelative = firstHeader[(firstSpace + 1)..].IndexOf(Space);
+        if (secondSpaceRelative == -1)
+            throw new InvalidOperationException("Invalid request line");
+
+        var secondSpace = firstSpace + secondSpaceRelative + 1;
+        
+        // REQUEST-TARGET slice: may include path + query (e.g., "/foo?bar=baz")
+        var url = firstHeader[(firstSpace + 1)..secondSpace];
+
+        var queryParamSeparator = url.IndexOf(Question);
+
+        if (queryParamSeparator == -1)
+        {
+            headerData.Route = new PinnedByteSequence(url);
+        }
+        else
+        {
+            headerData.Route = new PinnedByteSequence(url[..queryParamSeparator]);
+            headerData.QueryParameters = new PinnedByteSequence(url[(queryParamSeparator + 1)..]);
+        }
+        
+        // Get the rest of the headers
+        
+        headerData.Headers = new PinnedByteSequence(headerSpan[(lineEnd + 2)..]);
+        
+        return headerData;
+    }
+    
+    internal static H1HeaderData ExtractH1HeaderData(ReadOnlySpan<byte> headerSpan)
+    {
+        var headerData = new H1HeaderData();
+        
+        var lineEnd = headerSpan.IndexOf(Crlf);
+        var firstHeader = headerSpan[..lineEnd];
+
+        var firstSpace = firstHeader.IndexOf(Space);
+        if (firstSpace == -1)
+            throw new InvalidOperationException("Invalid request line");
+
+        if (CachedH1Data.CachedHttpMethods.TryGetOrAdd(firstHeader[..firstSpace], out var httpMethod))
+        {
+            headerData.HttpMethod = httpMethod;
+        }
+        
+        var secondSpaceRelative = firstHeader[(firstSpace + 1)..].IndexOf(Space);
+        if (secondSpaceRelative == -1)
+            throw new InvalidOperationException("Invalid request line");
+
+        var secondSpace = firstSpace + secondSpaceRelative + 1;
+        
+        // REQUEST-TARGET slice: may include path + query (e.g., "/foo?bar=baz")
+        var url = firstHeader[(firstSpace + 1)..secondSpace];
+
+        var queryParamSeparator = url.IndexOf(Question);
+
+        if (queryParamSeparator == -1)
+        {
+            if (CachedH1Data.CachedHttpMethods.TryGetOrAdd(url, out var route))
+            {
+                headerData.Route = route;
+            }
+        }
+        else
+        {
+            if (CachedH1Data.CachedHttpMethods.TryGetOrAdd(url[..queryParamSeparator], out var route))
+            {
+                headerData.Route = route;
+            }
+
+            var querySpan = url[(queryParamSeparator + 1)..];
+            var current = 0;
+
+
+            while (current < querySpan.Length)
+            {
+                var separator = querySpan[current..].IndexOf(QuerySeparator); // (byte)'&'
+                ReadOnlySpan<byte> pair;
+
+                if (separator == -1)
+                {
+                    pair = querySpan[current..];
+                    current = querySpan.Length;
+                }
+                else
+                {
+                    pair = querySpan.Slice(current, separator);
+                    current += separator + 1;
+                }
+
+                var equalsIndex = pair.IndexOf(Equal);
+                if (equalsIndex == -1)
+                    break;
+
+                headerData.QueryParameters!.TryAdd(CachedH1Data.CachedQueryKeys.GetOrAdd(pair[..equalsIndex]),
+                    Encoding.UTF8.GetString(pair[(equalsIndex + 1)..]));
+            }
+            
+            // Parse remaining headers
+            
+            var lineStart = 0;
+            while (true)
+            {
+                lineStart += lineEnd + 2;
+
+                lineEnd = headerSpan[lineStart..].IndexOf("\r\n"u8);
+                if (lineEnd == 0)
+                {
+                    // All Headers read
+                    break;
+                }
+
+                var header = headerSpan.Slice(lineStart, lineEnd);
+                var colonIndex = header.IndexOf(Colon);
+
+                if (colonIndex == -1)
+                {
+                    // Malformed header
+                    continue;
+                }
+
+                var headerKey = header[..colonIndex];
+                var headerValue = header[(colonIndex + 2)..];
+
+                headerData.Headers!.TryAdd(CachedH1Data.CachedHeaderKeys.GetOrAdd(headerKey),
+                    CachedH1Data.CachedHeaderValues.GetOrAdd(headerValue));
+            }
+        }
+        
+        return headerData;
     }
     
     // ===== Common tokens (kept as ReadOnlySpan<byte> for zero-allocation literals) =====

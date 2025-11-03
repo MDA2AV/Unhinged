@@ -41,7 +41,14 @@ public sealed partial class UnhingedEngine
             // - IsBackground=true so the process can exit if only workers remain.
             // - Name aids debugging and logs.
             // - Stack size is configurable to accommodate stackalloc-heavy hot paths.
-            var t = new Thread(() => WorkerLoop(W[iCap]), _maxStackSizePerThread) // 1MB
+            var t = new Thread(() =>
+                {
+                    // Performance seems to be lower when pinning threads to cpu core
+                    //PinCurrentThreadToCpu(iCap);
+                    //Console.WriteLine($"Thread {iCap} pinned to CPU {iCap}");
+                    
+                    WorkerLoop(W[iCap]);
+                }, _maxStackSizePerThread) // 1MB
             {
                 IsBackground = true,
                 Name = $"worker-{iCap}"

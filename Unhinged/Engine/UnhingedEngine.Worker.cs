@@ -4,11 +4,13 @@
 // ReSharper disable always StackAllocInsideLoop
 // ReSharper disable always ClassCannotBeInstantiated
 
+using System.Text;
+
 #pragma warning disable CA2014
 
 namespace Unhinged;
 
-public sealed unsafe partial class UnhingedEngine
+public sealed partial class UnhingedEngine
 {
     /// <summary>
     /// Result code for attempts to flush the connection's write buffer.
@@ -35,9 +37,11 @@ public sealed unsafe partial class UnhingedEngine
         /// <summary>
         /// Return a Connection to the pool. Consider resetting/clearing per-request state here.
         /// </summary>
-        public override bool Return(Connection context)
+        public override bool Return(Connection connection)
         {
             // Potentially reset buffers here (e.g., context.Reset()) to avoid data leaks across usages.
+            connection.Clear();
+            
             return true;
         }
     }
@@ -56,7 +60,7 @@ public sealed unsafe partial class UnhingedEngine
     ///  4) Handle EPOLLOUT (write-ready) to continue flushing responses.
     ///  5) On error/hup, close and recycle the connection.
     /// </summary>
-    private static void WorkerLoop(Worker W)
+    private static unsafe void WorkerLoop(Worker W)
     {
         // Per-worker connection table
         var connections = new Dictionary<int, Connection>(capacity: _maxNumberConnectionsPerWorker);
@@ -134,8 +138,11 @@ public sealed unsafe partial class UnhingedEngine
                         if (got > 0)
                         {
                             c.Tail += (int)got;
-                            continue;
                             
+                            // TODO: Which one, continue or break? break avoids an extra read to get a EAGAIN
+                            // TODO: But continue may read more data without the need of an extra epoll event
+                            //continue;
+                            break;
                         }
                         if (got == 0) { CloseConn(fd, connections, W); break; } // peer closed
                         
@@ -153,7 +160,32 @@ public sealed unsafe partial class UnhingedEngine
                         CloseConn(fd, connections, W); break; // default: close on unexpected errors
                     }
                     
-                    var dataToBeFlushedAvailable = TryParseRequests(c);
+                    _ = TryParseRequests(c, fd, W, connections);
+
+                    /*if (task is { IsCompleted: true, Result: true })
+                    {
+                        var tryEmptyResult = TryEmptyWriteBuffer(c, ref fd);
+                        if (tryEmptyResult == EmptyAttemptResult.Complete) // Hot path
+                        {
+                            // All requests were flushed, stay EPOLLIN
+                            //ArmEpollIn(ref fd, W.Ep);
+                            // Move on to the next event
+                            continue;
+                        }
+                        if (tryEmptyResult == EmptyAttemptResult.Incomplete)
+                        {
+                            // There is still data to be flushed in the buffer, arm EPOLLOUT
+                            ArmEpollOut(ref fd, W.Ep);
+                            continue;
+                        }
+                        if (tryEmptyResult == EmptyAttemptResult.CloseConnection)
+                        {
+                            CloseConn(fd, connections, W);
+                            continue;
+                        }
+                    }*/
+                    
+                    /*var dataToBeFlushedAvailable = TryParseRequests(c);
                     if (dataToBeFlushedAvailable)
                     {
                         var tryEmptyResult = TryEmptyWriteBuffer(c, ref fd);
@@ -174,7 +206,7 @@ public sealed unsafe partial class UnhingedEngine
                             CloseConn(fd, connections, W);
                             continue;
                         }
-                    }
+                    }*/
                     
                     // Move on to the next event...
                     continue;
@@ -216,23 +248,107 @@ public sealed unsafe partial class UnhingedEngine
     /// The receive window is compacted when partial data remains.
     /// Returns true if any response data was staged and should be flushed.
     /// </summary>
-    private static bool TryParseRequests(Connection connection)
+    private static async ValueTask TryParseRequests(
+        Connection connection, 
+        int fd, 
+        Worker W, 
+        Dictionary<int, Connection> connections)
     {
         bool hasDataToFlush = false;
+        
+        int idx = 0;
+        
+        while (true)
+        {
+            unsafe
+            {
+                // Try getting a full request header, if unsuccessful signal caller more data is needed
+                var headerSpan = FindCrlfCrlf(connection.ReceiveBuffer, connection.Head, connection.Tail, ref idx);
+                if (idx < 0)
+                    break;
+                
+                // A full request was received, handle it
+
+                // Extract the request Header data
+                connection.H1HeaderData = ExtractH1HeaderData(headerSpan);
+                
+                // Advance the pointer after the request was dealt with
+                connection.Head = idx + 4; // advance past CRLFCRLF
+            }
+
+            await _sRequestHandler(connection);
+            
+            // Clear pooled dictionaries (query parameters + headers)
+            connection.Clear();
+            
+            // Mark that there is data to flush (a request was fully processed)
+            hasDataToFlush = true;
+
+            if (connection.Head == connection.Tail) // No more data to read
+                break;
+        }
+
+        unsafe
+        {
+            // If there is unprocessed data in the receiving buffer (incomplete request) which is not at buffer start
+            // Move the incomplete request to the buffer start and reset head and tail to 0
+            if (connection.Head > 0 && connection.Head < connection.Tail)
+            {
+                Buffer.MemoryCopy(
+                    connection.ReceiveBuffer + connection.Head,
+                    connection.ReceiveBuffer,
+                    _inSlabSize,
+                    connection.Tail - connection.Head);
+            }
+        }
+        
+        //Reset the receiving buffer
+        connection.Head = connection.Tail = 0;
+
+        if (hasDataToFlush)
+        {
+            var tryEmptyResult = TryEmptyWriteBuffer(connection, ref fd);
+            if (tryEmptyResult == EmptyAttemptResult.Complete) // Hot path
+            {
+                // All requests were flushed, stay EPOLLIN
+                return;
+            }
+            if (tryEmptyResult == EmptyAttemptResult.Incomplete)
+            {
+                // There is still data to be flushed in the buffer, arm EPOLLOUT
+                ArmEpollOut(ref fd, W.Ep);
+                return;
+            }
+            if (tryEmptyResult == EmptyAttemptResult.CloseConnection)
+            {
+                CloseConn(fd, connections, W);
+                return;
+            }
+        }
+            
+    }
+    
+    private static unsafe bool TryParseRequests(Connection connection)
+    {
+        bool hasDataToFlush = false;
+
+        int idx = 0;
         
         while (true)
         {
             // Try getting a full request header, if unsuccessful signal caller more data is needed
             //int idx = FindCrlfCrlf(connection.Buf, connection.Head, connection.Tail);
             //int idx = FindCrlfCrlf(connection.ReceiveBuffer, connection.Head, connection.Tail);
-            var headerSpan = FindCrlfCrlf(connection.ReceiveBuffer, connection.Head, connection.Tail, out int idx);
+            var headerSpan = FindCrlfCrlf(connection.ReceiveBuffer, connection.Head, connection.Tail, ref idx);
             if (idx < 0)
                 break;
-            
+
+
             // A full request was received, handle it
-            
+
             // Extract the route
-            connection.HashedRoute = ExtractRoute(headerSpan);
+            connection.H1HeaderData = ExtractH1HeaderData(headerSpan);
+
             _sRequestHandler(connection);
             
             // Advance the pointer after the request was dealt with
@@ -250,14 +366,15 @@ public sealed unsafe partial class UnhingedEngine
         if (connection.Head > 0 && connection.Head < connection.Tail)
         {
             Buffer.MemoryCopy(
-                connection.ReceiveBuffer + connection.Head, 
-                connection.ReceiveBuffer, 
-                _inSlabSize, 
+                connection.ReceiveBuffer + connection.Head,
+                connection.ReceiveBuffer,
+                _inSlabSize,
                 connection.Tail - connection.Head);
         }
-        
+
         //Reset the receiving buffer
         connection.Head = connection.Tail = 0;
+        
         return hasDataToFlush;
     }
     
@@ -268,7 +385,7 @@ public sealed unsafe partial class UnhingedEngine
     ///   - Incomplete: partial write or EAGAIN; caller should arm EPOLLOUT
     ///   - CloseConnection: hard error while sending; caller should close the fd
     /// </summary>
-    private static EmptyAttemptResult TryEmptyWriteBuffer(Connection connection, ref int fd)
+    private static unsafe EmptyAttemptResult TryEmptyWriteBuffer(Connection connection, ref int fd)
     {
         while (true)
         {
@@ -321,7 +438,7 @@ public sealed unsafe partial class UnhingedEngine
     /// Arms EPOLLIN on the given fd (while preserving error/hup interest).
     /// Use after fully draining the write buffer to resume read-driven operation.
     /// </summary>
-    private static void ArmEpollIn(ref int fd, int ep)
+    private static unsafe void ArmEpollIn(ref int fd, int ep)
     {
         byte* ev = stackalloc byte[EvSize];
         WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
@@ -332,7 +449,7 @@ public sealed unsafe partial class UnhingedEngine
     /// Arms EPOLLOUT on the given fd (while preserving error/hup interest).
     /// Use when a partial flush occurs and more write-ready notifications are required.
     /// </summary>
-    private static void ArmEpollOut(ref int fd, int ep)
+    private static unsafe void ArmEpollOut(ref int fd, int ep)
     {
         byte* ev = stackalloc byte[EvSize];
         WriteEpollEvent(ev, EPOLLOUT | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
@@ -365,3 +482,22 @@ public sealed unsafe partial class UnhingedEngine
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void CloseQuiet(int fd) { try { close(fd); } catch { } }
 }
+
+// Some stuff that may be useful if I need to always schedule a task on the threadpool
+
+//_ = Task.Run(() => TryParseRequests(c, fd, W, connections));
+/*ThreadPool.UnsafeQueueUserWorkItem(static state =>
+{
+    var (conn, fd, w, dict) =
+        ((Connection,int,Worker,Dictionary<int,Connection>))state!;
+
+    var t = TryParseRequests(conn, fd, w, dict).AsTask();
+
+    if (!t.IsCompletedSuccessfully)
+    {
+        _ = t.ContinueWith(
+            tt => Console.WriteLine(tt.Exception!),                // your logging
+            TaskContinuationOptions.OnlyOnFaulted |
+            TaskContinuationOptions.ExecuteSynchronously);
+    }
+}, (c, fd, W, connections));*/

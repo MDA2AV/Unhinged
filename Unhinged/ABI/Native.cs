@@ -144,9 +144,12 @@ internal static unsafe class Native
     /// </summary>
     [DllImport("libc", SetLastError = true)] internal static extern int eventfd(uint initval, int flags);
     
-    [DllImport("libc", SetLastError = true)] internal static extern int sched_setaffinity(int pid, nuint cpusetsize, ref ulong mask);
-
-
+    [DllImport("libc", SetLastError = true)] internal static extern int sched_setaffinity(int pid, IntPtr cpusetsize, ref ulong mask);
+    
+    [DllImport("libc", SetLastError = true)] internal static extern int sched_setaffinity(int pid, IntPtr cpusetsize, ref cpu_set_t mask);
+    
+    [DllImport("libc")] internal static extern int gettid(); // Linux thread id
+    
     // =========================
     //     Struct definitions
     // =========================
@@ -264,4 +267,28 @@ internal static unsafe class Native
     internal const int EPIPE          = 32;
     internal const int ECONNABORTED   = 103;
     internal const int ECONNRESET     = 104;
+    
+    public static void PinCurrentThreadToCpu(int cpuIndex)
+    {
+        if (cpuIndex < 0 || cpuIndex >= Environment.ProcessorCount)
+            throw new ArgumentOutOfRangeException(nameof(cpuIndex));
+
+        unsafe
+        {
+            var set = new cpu_set_t();
+            int word = cpuIndex / 64;
+            int bit  = cpuIndex % 64;
+            set.Bits[word] = 1UL << bit;
+
+            int tid = gettid();
+            int ret = sched_setaffinity(tid, (IntPtr)sizeof(cpu_set_t), ref set);
+            if (ret != 0)
+                throw new InvalidOperationException($"sched_setaffinity failed with errno {Marshal.GetLastPInvokeError()}");
+        }
+    }
+}
+
+internal unsafe struct cpu_set_t
+{
+    public fixed ulong Bits[16]; // 1024 bits (enough for up to 1024 CPUs)
 }

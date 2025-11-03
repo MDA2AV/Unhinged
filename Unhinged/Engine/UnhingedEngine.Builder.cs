@@ -42,15 +42,17 @@ public sealed partial class UnhingedEngine
     private static Func<int>? _calculateNumberWorkers;
 
     // Default request handler (overridden via builder). Writes a minimal plaintext response.
-    private static Action<Connection> _sRequestHandler = DefaultRequestHandler;
+    private static Func<Connection, ValueTask> _sRequestHandler = DefaultRequestHandler;
 
-    private static void DefaultRequestHandler(Connection connection)
+    private static ValueTask DefaultRequestHandler(Connection connection)
     {
         connection.WriteBuffer.WriteUnmanaged("HTTP/1.1 200 OK\r\n"u8 +
                                               "Server: W\r\n"u8 +
                                               "Content-Type: text/plain\r\n"u8 +
                                               "Content-Length: 28\r\n\r\n"u8 +
                                               "Request handler was not set!"u8 );
+
+        return ValueTask.CompletedTask;
     }
     
     private UnhingedEngine() { }
@@ -134,7 +136,7 @@ public sealed partial class UnhingedEngine
         /// <summary>
         /// Inject the request handler used by workers to serve requests.
         /// </summary>
-        public UnhingedBuilder InjectRequestHandler(Action<Connection> requestHandler)
+        public UnhingedBuilder InjectRequestHandler(Func<Connection, ValueTask> requestHandler)
         {
             _sRequestHandler = requestHandler;
             return this;

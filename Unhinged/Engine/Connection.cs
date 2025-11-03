@@ -24,8 +24,11 @@ public unsafe class Connection : IDisposable
     /// <summary>Writer over the send slab.</summary>
     public readonly FixedBufferWriter WriteBuffer;
     
-    // <summary>Fnv1a32 hashed route</summary>
-    public uint HashedRoute { get; set; }
+    /// <summary>
+    /// Header data, no allocations
+    /// </summary>
+    public BinaryH1HeaderData BinaryH1HeaderData { get; set; }
+    public H1HeaderData H1HeaderData { get; set; }
 
     /// <param name="maxConnections">Used to size the slabs (typically per-worker slab size).</param>
     /// <param name="inSlabSize">Bytes per connection for receive.</param>
@@ -38,6 +41,11 @@ public unsafe class Connection : IDisposable
         WriteBuffer = new FixedBufferWriter(
             (byte*)NativeMemory.AlignedAlloc((nuint)(maxConnections * outSlabSize), 64),
             outSlabSize);
+    }
+
+    public void Clear()
+    {
+        H1HeaderData?.Clear();
     }
 
     /// <summary>

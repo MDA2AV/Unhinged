@@ -8,6 +8,8 @@ using Unhinged;
 
 #pragma warning disable CA2014
 
+// dotnet publish -c Release /p:PublishAot=true /p:OptimizationPreference=Speed
+
 [SkipLocalsInit]
 internal static class Program
 {
@@ -15,7 +17,7 @@ internal static class Program
     {
         var builder = UnhingedEngine
             .CreateBuilder()
-            .SetNWorkersSolver(() => Environment.ProcessorCount / 2)
+            .SetNWorkersSolver(() => (Environment.ProcessorCount / 2) - 2)
             .SetBacklog(16384)
             .SetMaxEventsPerWake(512)
             .SetMaxNumberConnectionsPerWorker(512)
@@ -28,13 +30,25 @@ internal static class Program
         engine.Run();
     }
 
-    private static void RequestHandler(Connection connection)
+    private static ValueTask RequestHandler(Connection connection)
     {
-       if(connection.HashedRoute == 291830056)          // /json
+       /*if(connection.HashedRoute == 291830056)          // /json
            CommitJsonResponse(connection);
        
        else if (connection.HashedRoute == 3454831873)   // /plaintext
+           CommitPlainTextResponse(connection);*/
+
+       if (connection.H1HeaderData.Route.Equals("/json"))
+       {
+           CommitJsonResponse(connection);
+       }
+       
+       else if (connection.H1HeaderData.Route.Equals("/plaintext"))
+       {
            CommitPlainTextResponse(connection);
+       }
+
+       return ValueTask.CompletedTask;
     }
     
     [ThreadStatic] private static Utf8JsonWriter? _tUtf8JsonWriter;
