@@ -18,6 +18,8 @@
         <PackageLicenseFile>LICENSE</PackageLicenseFile>
         <Description>https://github.com/MDA2AV/Unhinged</Description>
         <PackageProjectUrl>https://github.com/MDA2AV/Unhinged</PackageProjectUrl>
+
+        <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
         
     </PropertyGroup>
 
