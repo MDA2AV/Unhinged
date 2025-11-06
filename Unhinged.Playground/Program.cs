@@ -17,12 +17,12 @@ internal static class Program
     {
         var builder = UnhingedEngine
             .CreateBuilder()
-            .SetNWorkersSolver(() => (Environment.ProcessorCount / 2) - 2)
+            .SetNWorkersSolver(() => (Environment.ProcessorCount / 2))
             .SetBacklog(16384)
             .SetMaxEventsPerWake(512)
             .SetMaxNumberConnectionsPerWorker(512)
             .SetPort(8080)
-            .SetSlabSizes(16 * 1024, 16 * 1024)
+            .SetSlabSizes(512 * 1024, 128 * 1024)
             .InjectRequestHandler(RequestHandler);
         
         var engine = builder.Build();

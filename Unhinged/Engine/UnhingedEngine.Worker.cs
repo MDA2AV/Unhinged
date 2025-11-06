@@ -110,7 +110,6 @@ public sealed partial class UnhingedEngine
 
                     // Ensure free space at the tail; compact or grow if necessary.
                     // TODO: This logic needs rework, doesn't sense
-                    //int avail = c.Buf.Length - c.Tail;
                     int avail = _inSlabSize - c.Tail;
                     
                     // If the receiving buffer has no space available, that means that either there are
@@ -131,8 +130,7 @@ public sealed partial class UnhingedEngine
                     while (true)
                     {
                         long got;
-                        //fixed (byte* p = &c.Buf[c.Tail])
-                        //    got = recv(fd, (IntPtr)p, (ulong)avail, 0);
+                        
                         got = recv(fd, c.ReceiveBuffer + c.Tail, (ulong)avail, 0);
 
                         if (got > 0)
@@ -155,7 +153,7 @@ public sealed partial class UnhingedEngine
                             // TODO: That could be an issue because this could give more airtime to a specific fd
                             // TODO: We want to release the loop to move into another fd's?
                             break;
-                        } 
+                        }
                         if (err is ECONNRESET or ECONNABORTED or EPIPE) { CloseConn(fd, connections, W); break; }
                         CloseConn(fd, connections, W); break; // default: close on unexpected errors
                     }
@@ -257,7 +255,7 @@ public sealed partial class UnhingedEngine
         bool hasDataToFlush = false;
         
         int idx = 0;
-        
+
         while (true)
         {
             unsafe
@@ -268,8 +266,6 @@ public sealed partial class UnhingedEngine
                     break;
                 
                 // A full request was received, handle it
-
-                // Extract the request Header data
                 connection.H1HeaderData = ExtractH1HeaderData(headerSpan);
                 
                 // Advance the pointer after the request was dealt with
@@ -294,17 +290,24 @@ public sealed partial class UnhingedEngine
             // Move the incomplete request to the buffer start and reset head and tail to 0
             if (connection.Head > 0 && connection.Head < connection.Tail)
             {
+                var length = connection.Tail - connection.Head;
                 Buffer.MemoryCopy(
                     connection.ReceiveBuffer + connection.Head,
                     connection.ReceiveBuffer,
                     _inSlabSize,
-                    connection.Tail - connection.Head);
+                    length);
+                
+                // Update head to 0 and tail to length
+                connection.Head = 0;
+                connection.Tail = length;
+            }
+            else
+            {
+                //Reset the receiving buffer
+                connection.Head = connection.Tail = 0;
             }
         }
         
-        //Reset the receiving buffer
-        connection.Head = connection.Tail = 0;
-
         if (hasDataToFlush)
         {
             var tryEmptyResult = TryEmptyWriteBuffer(connection, ref fd);
@@ -441,7 +444,7 @@ public sealed partial class UnhingedEngine
     private static unsafe void ArmEpollIn(ref int fd, int ep)
     {
         byte* ev = stackalloc byte[EvSize];
-        WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
+        WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP | EPOLLET, fd);
         epoll_ctl(ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
     }
 
@@ -452,7 +455,7 @@ public sealed partial class UnhingedEngine
     private static unsafe void ArmEpollOut(ref int fd, int ep)
     {
         byte* ev = stackalloc byte[EvSize];
-        WriteEpollEvent(ev, EPOLLOUT | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
+        WriteEpollEvent(ev, EPOLLOUT | EPOLLRDHUP | EPOLLERR | EPOLLHUP | EPOLLET, fd);
         epoll_ctl(ep, EPOLL_CTL_MOD, fd, (IntPtr)ev);
     }
     

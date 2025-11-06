@@ -231,6 +231,8 @@ internal static unsafe class Native
     internal const int EPOLLERR     = 0x008;
     internal const int EPOLLHUP     = 0x010;
     internal const int EPOLLRDHUP   = 0x2000;
+    internal const uint EPOLLET     = 0x80000000;
+    internal const uint EPOLLONESHOT = 0x40000000;
 
     // epoll_ctl ops
     internal const int EPOLL_CTL_ADD = 1;
