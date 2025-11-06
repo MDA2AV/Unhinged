@@ -107,6 +107,34 @@ internal static unsafe class ProcessorArchDependant
             fd = (int)*(uint*)((byte*)src + 8);
         }
     }
+    
+    // Variations, TODO: Test performance required
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void WriteEpollEvent2(void* dest, uint events, int fd)
+    {
+        // Write events (always aligned 4B store)
+        *(uint*)dest = events;
+
+        // Compute data offset (packed: +4, natural: +8)
+        var data = (byte*)dest + (Packed ? 4 : 8);
+
+        // Store only low 32 bits of fd and zero the high 32 bits.
+        // Using two 4B stores avoids an unaligned 8B write in the packed layout.
+        *(uint*)data       = (uint)fd; // low 32
+        *(uint*)(data + 4) = 0;        // high 32
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    internal static void ReadEpollEvent2(void* src, out uint events, out int fd)
+    {
+        events = *(uint*)src;
+
+        var data = (byte*)src + (Packed ? 4 : 8);
+
+        // We only ever wrote the low 32 bits; read exactly those.
+        fd = (int)*(uint*)data;
+    }
 
     // =============================================================================================
     // Networking helpers
