@@ -1,0 +1,43 @@
+Try with continue
+
+if (got > 0) {
+    c.Tail += (int)got;
+    continue;  // ← Keep reading until EAGAIN
+}
+
+
+3. Write Batching
+csharp// Instead of send() per request, consider:
+private static EmptyAttemptResult TryEmptyWriteBuffer(Connection c, ref int fd)
+{
+    // If multiple responses are queued, use writev() for vectored I/O
+    // This sends multiple buffers in one syscall
+    
+    // struct iovec iov[MAX_IOV];
+    // writev(fd, iov, count);
+}
+
+
+
+5. Edge-Triggered Mode
+Consider using EPOLLET (edge-triggered):
+csharpWriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP | EPOLLET, fd);
+```
+
+**Benefits**:
+- Fewer epoll events (only on edge transitions)
+- Forces you to drain socket completely (which you're already doing)
+
+**Requires**:
+- Always read until EAGAIN ✅ (you do this)
+- Always write until EAGAIN ✅ (you do this)
+
+
+Given your performance goals, EPOLLONESHOT might be the right answer:
+csharpbyte* ev = stackalloc byte[EvSize];
+WriteEpollEvent(ev, EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLERR | EPOLLHUP, fd);
+epoll_ctl(W.Ep, EPOLL_CTL_ADD, fd, (IntPtr)ev);
+
+// After TryParseRequests completes:
+// Re-arm with EPOLLONESHOT
+ArmEpollIn(ref fd, W.Ep);  // Re-enables EPOLLIN
