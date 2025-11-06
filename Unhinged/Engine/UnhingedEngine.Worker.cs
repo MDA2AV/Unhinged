@@ -86,7 +86,7 @@ public sealed partial class UnhingedEngine
                     {
                         // We care about readable input and remote half-close; errors/hups too.
                         byte* ev = stackalloc byte[EvSize];
-                        WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP, cfd);
+                        WriteEpollEvent(ev, EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP | EPOLLET, cfd);
                         epoll_ctl(W.Ep, EPOLL_CTL_ADD, cfd, (IntPtr)ev);
                         
                         // Adding a new connection to the pool, setting the file descriptor for the client socket 
@@ -139,8 +139,8 @@ public sealed partial class UnhingedEngine
                             
                             // TODO: Which one, continue or break? break avoids an extra read to get a EAGAIN
                             // TODO: But continue may read more data without the need of an extra epoll event
-                            //continue;
-                            break;
+                            continue;
+                            //break;
                         }
                         if (got == 0) { CloseConn(fd, connections, W); break; } // peer closed
                         
