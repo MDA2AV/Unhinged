@@ -28,7 +28,8 @@ public unsafe class Connection : IDisposable
     /// Header data, no allocations
     /// </summary>
     public BinaryH1HeaderData BinaryH1HeaderData { get; set; }
-    public H1HeaderData H1HeaderData { get; set; }
+
+    public H1HeaderData H1HeaderData { get; set; } = null!;
 
     /// <param name="maxConnections">Used to size the slabs (typically per-worker slab size).</param>
     /// <param name="inSlabSize">Bytes per connection for receive.</param>
@@ -37,9 +38,9 @@ public unsafe class Connection : IDisposable
     {
         //AlignedAlloc(size, 64) ensures your memory starts at an address that’s a multiple of 64,
         //matching CPU cache-line size, reducing false sharing and improving SIMD/cache performance.
-        ReceiveBuffer = (byte*)NativeMemory.AlignedAlloc((nuint)(maxConnections * inSlabSize), 64);
+        ReceiveBuffer = (byte*)NativeMemory.AlignedAlloc((nuint)(inSlabSize), 64);
         WriteBuffer = new FixedBufferWriter(
-            (byte*)NativeMemory.AlignedAlloc((nuint)(maxConnections * outSlabSize), 64),
+            (byte*)NativeMemory.AlignedAlloc((nuint)(outSlabSize), 64),
             outSlabSize);
     }
 
