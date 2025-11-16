@@ -131,9 +131,23 @@ internal sealed unsafe class Worker : IDisposable
     
     public void Dispose()
     {
-        try { if (Ep >= 0) close(Ep); } catch { /* log */ }
-        try { if (NotifyEfd >= 0) close(NotifyEfd); } catch { /* log */ }
-        if (EventsBuf != IntPtr.Zero) Marshal.FreeHGlobal(EventsBuf);
+        try
+        {
+            if (Ep >= 0) 
+                close(Ep); 
+            
+        } catch { /* log */ }
+
+        try
+        {
+            if (NotifyEfd >= 0) 
+                close(NotifyEfd); 
+            
+        } catch { /* log */ }
+        
+        if (EventsBuf != IntPtr.Zero) 
+            Marshal.FreeHGlobal(EventsBuf);
+        
         // Optionally GC.SuppressFinalize(this);
     }
 }
