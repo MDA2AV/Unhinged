@@ -239,11 +239,11 @@ public sealed partial class UnhingedEngine
     }
     
     /// <summary>
-    /// Parses as many complete HTTP requests as are present in the receive buffer.
+    /// Parses as many complete HTTP requests as are present in the receiving buffer.
     /// For each complete request:
     ///   - extracts the route
     ///   - invokes the configured request handler to stage a response into WriteBuffer
-    /// The receive window is compacted when partial data remains.
+    /// The receiving window is compacted when partial data remains.
     /// Returns true if any response data was staged and should be flushed.
     /// </summary>
     private static async ValueTask TryParseRequests(
@@ -275,6 +275,7 @@ public sealed partial class UnhingedEngine
             await _sRequestHandler(connection);
             
             // Clear pooled dictionaries (query parameters + headers)
+            // Currently Clear won't reset the buffers, if it changes, adapt here too
             connection.Clear();
             
             // Mark that there is data to flush (a request was fully processed)
