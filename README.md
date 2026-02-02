@@ -1,7 +1,7 @@
 [![NuGet](https://img.shields.io/nuget/v/Unhinged.svg)](https://www.nuget.org/packages/Unhinged/)
 
 # Unhinged
-Linux C# Ultra fast socket(epoll) server for benchmark purposes.
+Linux C# Ultra fast socket(epoll) server for benchmark purposes
 
 # How to build
 Currently the project is targeting <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
