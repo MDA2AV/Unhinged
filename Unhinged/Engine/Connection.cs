@@ -16,7 +16,7 @@ namespace Unhinged;
 public unsafe class Connection : IDisposable
 {
     /// <summary>Read window: bytes are valid in [<see cref="Head"/> ... <see cref="Tail"/>)</summary>
-    public int Head, Tail;
+    public int Head, Tail = 0;
 
     /// <summary>Base pointer for the receiving slab.</summary>
     public readonly byte* ReceiveBuffer;

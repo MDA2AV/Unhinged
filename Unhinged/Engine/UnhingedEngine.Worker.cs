@@ -246,7 +246,7 @@ public sealed partial class UnhingedEngine
     /// The receiving window is compacted when partial data remains.
     /// Returns true if any response data was staged and should be flushed.
     /// </summary>
-    private static async ValueTask TryParseRequests(
+    private static async Task TryParseRequests(
         Connection connection, 
         int fd, 
         Worker W, 
