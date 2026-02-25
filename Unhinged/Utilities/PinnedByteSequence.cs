@@ -20,7 +20,7 @@ public readonly unsafe struct PinnedByteSequence : IEquatable<PinnedByteSequence
         Length = length;
     }
     
-    internal unsafe ReadOnlySpan<byte> AsSpan() => new(_ptr, Length);
+    public unsafe ReadOnlySpan<byte> AsSpan() => new(_ptr, Length);
 
     public bool Equals(PinnedByteSequence other)
     {

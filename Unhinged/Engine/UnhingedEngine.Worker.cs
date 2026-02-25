@@ -266,7 +266,8 @@ public sealed partial class UnhingedEngine
                     break;
                 
                 // A full request was received, handle it
-                connection.H1HeaderData = ExtractH1HeaderData(headerSpan);
+                connection.BinaryH1HeaderData = ExtractBinaryH1HeaderData(headerSpan);
+                //connection.H1HeaderData = ExtractH1HeaderData(headerSpan);
                 
                 // Advance the pointer after the request was dealt with
                 connection.Head = idx + 4; // advance past CRLFCRLF
@@ -351,7 +352,8 @@ public sealed partial class UnhingedEngine
             // A full request was received, handle it
 
             // Extract the route
-            connection.H1HeaderData = ExtractH1HeaderData(headerSpan);
+            connection.BinaryH1HeaderData = ExtractBinaryH1HeaderData(headerSpan);
+            //connection.H1HeaderData = ExtractH1HeaderData(headerSpan);
 
             _sRequestHandler(connection);
             
